@@ -48,7 +48,7 @@ export default function Closing() {
   const idem = useRef(crypto.randomUUID());
 
   useEffect(() => {
-    api.get("/payroll/next-period").then((r) => { setPeriod(r.data); setEnd(r.data.max_end_date); }).catch((e) => toast.error(errMsg(e)));
+    api.get("/payroll/next-period").then((r) => { setPeriod(r.data); setEnd((v) => v || r.data.max_end_date); }).catch((e) => toast.error(errMsg(e)));
   }, []);
 
   const run = async (nextStep) => {

@@ -117,6 +117,22 @@ CREATE TABLE IF NOT EXISTS cash_advances(
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE cash_advances DROP CONSTRAINT IF EXISTS cash_advances_kind_check;
+ALTER TABLE cash_advances ADD CONSTRAINT cash_advances_kind_check CHECK (kind IN ('grant','deduction','reversal'));
+CREATE TABLE IF NOT EXISTS payroll_adjustments(
+  id SERIAL PRIMARY KEY,
+  period_id INT NOT NULL REFERENCES payroll_periods(id),
+  employee_id INT NOT NULL REFERENCES employees(id),
+  kind TEXT NOT NULL CHECK (kind IN ('earning','deduction','kasbon_reversal')),
+  amount BIGINT NOT NULL CHECK (amount > 0),
+  reason TEXT NOT NULL CHECK (length(trim(reason)) >= 5),
+  before JSONB NOT NULL,
+  after JSONB NOT NULL,
+  cash_advance_id INT REFERENCES cash_advances(id),
+  idempotency_key TEXT UNIQUE NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE UNIQUE INDEX IF NOT EXISTS kasbon_one_deduction ON cash_advances(period_id, employee_id) WHERE kind='deduction';
 CREATE TABLE IF NOT EXISTS audit_logs(
   id BIGSERIAL PRIMARY KEY,

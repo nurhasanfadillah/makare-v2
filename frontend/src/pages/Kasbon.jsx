@@ -62,9 +62,9 @@ function LedgerDialog({ emp, onClose }) {
             <tbody>{rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="py-2">{dateID(r.tx_date)}</td>
-                <td>{r.kind === "grant" ? "Pemberian" : "Potongan payroll"}</td>
+                <td>{{ grant: "Pemberian", deduction: "Potongan payroll", reversal: "Pembatalan potongan (koreksi)" }[r.kind]}</td>
                 <td className="text-muted-foreground">{r.note || "—"}{r.period_id && ` (periode #${r.period_id})`}</td>
-                <td className={`text-right mk-num ${r.kind === "grant" ? "text-[#0B1F3A]" : "text-emerald-700"}`}>{r.kind === "grant" ? "+" : "−"}{rupiah(r.amount)}</td>
+                <td className={`text-right mk-num ${r.kind === "deduction" ? "text-red-700" : "text-emerald-700"}`}>{r.kind === "deduction" ? "−" : "+"}{rupiah(r.amount)}</td>
               </tr>
             ))}</tbody>
           </table>
@@ -89,13 +89,14 @@ export default function Kasbon() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="kasbon-table">
               <thead className="bg-[#F4F7FB] text-left text-xs uppercase tracking-wider text-muted-foreground">
-                <tr><th className="px-4 py-3">Karyawan</th><th className="px-4 py-3 text-right">Total diberikan</th><th className="px-4 py-3 text-right">Total dipotong</th><th className="px-4 py-3 text-right">Saldo tersedia</th><th className="px-4 py-3 text-right">Riwayat</th></tr>
+                <tr><th className="px-4 py-3">Karyawan</th><th className="px-4 py-3 text-right">Total diberikan</th><th className="px-4 py-3 text-right">Total dipotong</th><th className="px-4 py-3 text-right">Dibatalkan (koreksi)</th><th className="px-4 py-3 text-right">Saldo tersedia</th><th className="px-4 py-3 text-right">Riwayat</th></tr>
               </thead>
               <tbody>{list.map((r) => (
                 <tr key={r.employee_id} className="border-t" data-testid={`kasbon-row-${r.code}`}>
                   <td className="px-4 py-3"><div className="font-medium">{r.full_name}</div><div className="text-xs text-muted-foreground mk-num">{r.code}</div></td>
                   <td className="px-4 py-3 text-right mk-num">{rupiah(r.total_grant)}</td>
                   <td className="px-4 py-3 text-right mk-num">{rupiah(r.total_deduction)}</td>
+                  <td className="px-4 py-3 text-right mk-num">{rupiah(r.total_reversal)}</td>
                   <td className="px-4 py-3 text-right mk-num font-semibold text-[#0B1F3A]" data-testid={`kasbon-balance-${r.code}`}>{rupiah(r.balance)}</td>
                   <td className="px-4 py-3 text-right"><Button variant="ghost" size="sm" onClick={() => setLedger(r)} data-testid={`kasbon-ledger-${r.code}`}><History className="h-4 w-4" /></Button></td>
                 </tr>

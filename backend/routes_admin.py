@@ -35,7 +35,7 @@ async def dashboard(user: dict = Depends(current_user)):
             from services import next_period
             res["next_period"] = await next_period(c)
             res["kasbon_outstanding"] = await c.fetchval(
-                "SELECT coalesce(sum(CASE WHEN kind='grant' THEN amount ELSE -amount END),0) FROM cash_advances")
+                "SELECT coalesce(sum(CASE WHEN kind='deduction' THEN -amount ELSE amount END),0) FROM cash_advances")
             res["recent_activity"] = rows(await c.fetch(
                 "SELECT actor, action, entity, entity_id, result, created_at FROM audit_logs WHERE action <> 'login' ORDER BY id DESC LIMIT 8"))
     return res
@@ -100,7 +100,7 @@ async def get_employee(eid: int, admin: dict = Depends(require_admin)):
     out["components"] = [{**dict(c), "volume": float(c["volume"])} for c in await pool.fetch(
         "SELECT name, amount, volume, note FROM employee_components WHERE employee_id=$1 ORDER BY id", eid)]
     out["kasbon_balance"] = await pool.fetchval(
-        "SELECT coalesce(sum(CASE WHEN kind='grant' THEN amount ELSE -amount END),0) FROM cash_advances WHERE employee_id=$1", eid)
+        "SELECT coalesce(sum(CASE WHEN kind='deduction' THEN -amount ELSE amount END),0) FROM cash_advances WHERE employee_id=$1", eid)
     return out
 
 
@@ -370,7 +370,8 @@ async def kasbon_summary(admin: dict = Depends(require_admin)):
         "SELECT e.id AS employee_id, e.code, e.full_name, e.active, "
         "coalesce(sum(CASE WHEN c.kind='grant' THEN c.amount END),0) AS total_grant, "
         "coalesce(sum(CASE WHEN c.kind='deduction' THEN c.amount END),0) AS total_deduction, "
-        "coalesce(sum(CASE WHEN c.kind='grant' THEN c.amount ELSE -c.amount END),0) AS balance "
+        "coalesce(sum(CASE WHEN c.kind='reversal' THEN c.amount END),0) AS total_reversal, "
+        "coalesce(sum(CASE WHEN c.kind='deduction' THEN -c.amount ELSE c.amount END),0) AS balance "
         "FROM employees e JOIN cash_advances c ON c.employee_id=e.id GROUP BY e.id ORDER BY e.code"))
 
 

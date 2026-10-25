@@ -4,14 +4,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-from core import get_pool, err, rows, row, today_wib
+from core import get_pool, err, rows, row, today_wib, audit, WIB
 from security import require_admin
 from services import next_period, build_payroll, finalize_closing
 
@@ -61,10 +63,26 @@ async def finalize(body: FinalizeIn, admin: dict = Depends(require_admin)):
         return await finalize_closing(c, body.end_date, body.idempotency_key, _ov(body.adjustments), admin["username"])
 
 
+DELTA_SQL = "CASE WHEN kind='deduction' THEN -amount ELSE amount END"
+
+
 @router.get("/periods")
 async def periods(admin: dict = Depends(require_admin)):
     pool = await get_pool()
-    return rows(await pool.fetch("SELECT id, start_date, end_date, totals, closed_by, closed_at FROM payroll_periods ORDER BY end_date DESC"))
+    return rows(await pool.fetch(
+        "SELECT p.id, p.start_date, p.end_date, p.totals, p.closed_by, p.closed_at, "
+        f"(SELECT coalesce(sum({DELTA_SQL}),0) FROM payroll_adjustments a WHERE a.period_id=p.id) AS adjustment_net, "
+        "(SELECT count(*) FROM payroll_adjustments a WHERE a.period_id=p.id) AS adjustment_count "
+        "FROM payroll_periods p ORDER BY p.end_date DESC"))
+
+
+def _apply_adjustments(ln: dict, adjs: list) -> dict:
+    mine = [a for a in adjs if a["employee_id"] == ln["employee_id"]]
+    s = {k: sum(a["amount"] for a in mine if a["kind"] == k) for k in ("earning", "deduction", "kasbon_reversal")}
+    net_adj = s["earning"] - s["deduction"] + s["kasbon_reversal"]
+    return {**ln, "adj_earning": s["earning"], "adj_deduction": s["deduction"], "adj_kasbon_reversal": s["kasbon_reversal"],
+            "adj_net": net_adj, "adj_count": len(mine), "net_effective": ln["net_final"] + net_adj,
+            "kasbon_effective": ln["kasbon_deduction"] - s["kasbon_reversal"]}
 
 
 async def _period(pid: int):
@@ -73,15 +91,112 @@ async def _period(pid: int):
     if not p:
         err(404, "Periode tidak ditemukan")
     snaps = await pool.fetch("SELECT employee_id, data FROM payroll_snapshots WHERE period_id=$1 ORDER BY id", pid)
-    return p, [s["data"] for s in snaps]
+    adjs = [dict(a) for a in await pool.fetch(
+        "SELECT a.*, e.code, e.full_name FROM payroll_adjustments a JOIN employees e ON e.id=a.employee_id "
+        "WHERE a.period_id=$1 ORDER BY a.id", pid)]
+    return p, [_apply_adjustments(s["data"], adjs) for s in snaps], adjs
 
 
 @router.get("/periods/{pid}")
 async def period_detail(pid: int, admin: dict = Depends(require_admin)):
-    p, lines = await _period(pid)
+    p, lines, adjs = await _period(pid)
     out = row(p)
     out.pop("idempotency_key", None)
-    return {**out, "lines": lines}
+    for a in adjs:
+        a.pop("idempotency_key", None)
+    return {**out, "lines": lines, "adjustments": rows(adjs),
+            "adjustment_net": sum(ln["adj_net"] for ln in lines),
+            "net_effective_total": sum(ln["net_effective"] for ln in lines)}
+
+
+KIND_LABEL = {"earning": "Tambahan (kurang bayar)", "deduction": "Potongan (lebih bayar)",
+              "kasbon_reversal": "Pembatalan potongan kasbon"}
+
+
+class AdjustmentIn(BaseModel):
+    employee_id: int
+    kind: Literal["earning", "deduction", "kasbon_reversal"]
+    amount: int = Field(gt=0, le=1_000_000_000)
+
+
+class AdjustmentCreate(AdjustmentIn):
+    reason: str = Field(min_length=5, max_length=500)
+    idempotency_key: str = Field(min_length=8, max_length=80)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_text(cls, v):
+        if len(v.strip()) < 5:
+            raise ValueError("Alasan minimal 5 karakter")
+        return v.strip()
+
+
+async def _impact(c, pid: int, body: AdjustmentIn) -> dict:
+    snap = await c.fetchrow(
+        "SELECT s.net_final, s.kasbon_deduction, e.code, e.full_name FROM payroll_snapshots s JOIN employees e ON e.id=s.employee_id "
+        "WHERE s.period_id=$1 AND s.employee_id=$2", pid, body.employee_id)
+    if not snap:
+        err(404, "Karyawan tidak ada dalam snapshot periode ini")
+    agg = await c.fetchrow(
+        "SELECT coalesce(sum(amount) FILTER (WHERE kind='earning'),0) AS e, coalesce(sum(amount) FILTER (WHERE kind='deduction'),0) AS d, "
+        "coalesce(sum(amount) FILTER (WHERE kind='kasbon_reversal'),0) AS r FROM payroll_adjustments WHERE period_id=$1 AND employee_id=$2",
+        pid, body.employee_id)
+    balance = await c.fetchval(f"SELECT coalesce(sum({DELTA_SQL}),0) FROM cash_advances WHERE employee_id=$1", body.employee_id)
+    balance = int(balance)  # sum(bigint) -> numeric/Decimal; Decimal is not JSON serializable for JSONB insert
+    cur_net = int(snap["net_final"] + agg["e"] - agg["d"] + agg["r"])
+    cur_kasbon = int(snap["kasbon_deduction"] - agg["r"])
+    if body.kind == "deduction" and body.amount > cur_net:
+        err(422, f"Potongan koreksi melebihi gaji bersih efektif ({rp(cur_net)})")
+    if body.kind == "kasbon_reversal" and body.amount > cur_kasbon:
+        err(422, f"Pembatalan melebihi potongan kasbon efektif periode ini ({rp(cur_kasbon)})")
+    delta = -body.amount if body.kind == "deduction" else body.amount
+    rev = body.amount if body.kind == "kasbon_reversal" else 0
+    return {
+        "employee": {"id": body.employee_id, "code": snap["code"], "full_name": snap["full_name"]},
+        "kind": body.kind, "kind_label": KIND_LABEL[body.kind], "amount": body.amount, "delta_net": delta,
+        "original": {"net_final": snap["net_final"], "kasbon_deduction": snap["kasbon_deduction"]},
+        "before": {"net_final": cur_net, "kasbon_deduction": cur_kasbon, "kasbon_balance": balance},
+        "after": {"net_final": cur_net + delta, "kasbon_deduction": cur_kasbon - rev, "kasbon_balance": balance + rev},
+    }
+
+
+@router.post("/periods/{pid}/adjustments/preview")
+async def adjustment_preview(pid: int, body: AdjustmentIn, admin: dict = Depends(require_admin)):
+    pool = await get_pool()
+    async with pool.acquire() as c:
+        if not await c.fetchval("SELECT 1 FROM payroll_periods WHERE id=$1", pid):
+            err(404, "Periode tidak ditemukan")
+        return await _impact(c, pid, body)
+
+
+@router.post("/periods/{pid}/adjustments")
+async def adjustment_create(pid: int, body: AdjustmentCreate, admin: dict = Depends(require_admin)):
+    pool = await get_pool()
+    async with pool.acquire() as c, c.transaction():
+        await c.execute("SELECT pg_advisory_xact_lock(3003, $1)", pid)
+        dup = await c.fetchrow("SELECT id, period_id, employee_id, kind, amount FROM payroll_adjustments WHERE idempotency_key=$1", body.idempotency_key)
+        if dup:
+            if (dup["period_id"], dup["employee_id"], dup["kind"], dup["amount"]) != (pid, body.employee_id, body.kind, body.amount):
+                err(409, "Kunci transaksi sudah dipakai untuk koreksi lain")
+            return {"id": dup["id"], "duplicate": True}
+        if not await c.fetchval("SELECT 1 FROM payroll_periods WHERE id=$1", pid):
+            err(404, "Periode tidak ditemukan")
+        imp = await _impact(c, pid, body)
+        kasbon_tx = None
+        if body.kind == "kasbon_reversal":
+            kasbon_tx = await c.fetchval(
+                "INSERT INTO cash_advances(employee_id, kind, amount, tx_date, note, period_id, created_by) "
+                "VALUES($1,'reversal',$2,$3,$4,$5,$6) RETURNING id", body.employee_id, body.amount, today_wib(),
+                f"Koreksi periode #{pid}: {body.reason.strip()}"[:200], pid, admin["username"])
+        aid = await c.fetchval(
+            "INSERT INTO payroll_adjustments(period_id, employee_id, kind, amount, reason, before, after, cash_advance_id, idempotency_key, created_by) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id", pid, body.employee_id, body.kind, body.amount, body.reason.strip(),
+            imp["before"], imp["after"], kasbon_tx, body.idempotency_key, admin["username"])
+        await audit(c, admin["username"], "payroll_adjusted", "payroll_period", pid,
+                    before={"employee": imp["employee"]["code"], **imp["before"]},
+                    after={"employee": imp["employee"]["code"], "kind": body.kind, "amount": body.amount, "reason": body.reason.strip(),
+                           "adjustment_id": aid, **imp["after"]})
+    return {"id": aid, "duplicate": False, **imp}
 
 
 def rp(v) -> str:
@@ -123,29 +238,30 @@ def _head(p, title):
     h = ss["Title"].clone("h", textColor=NAVY, fontSize=15, alignment=0, spaceAfter=2)
     return [Paragraph(cfg.get("company_name", "MAKARE"), h),
             Paragraph(f"{title} — Periode {p['start_date']:%d/%m/%Y} s.d. {p['end_date']:%d/%m/%Y}", ss["Normal"]),
-            Paragraph(f"Snapshot final #{p['id']} · ditutup oleh {p['closed_by']} pada {p['closed_at']:%d/%m/%Y %H:%M} WIB", ss["Italic"]),
+            Paragraph(f"Snapshot final #{p['id']} · ditutup oleh {p['closed_by']} pada {p['closed_at'].astimezone(WIB):%d/%m/%Y %H:%M} WIB", ss["Italic"]),
             Spacer(1, 6 * mm)]
 
 
 @router.get("/periods/{pid}/recap.pdf")
 async def recap_pdf(pid: int, admin: dict = Depends(require_admin)):
-    p, lines = await _period(pid)
-    data = [["ID", "Nama", "Mode", "Jam Dibayar", "Lembur", "Gaji Kotor", "Potongan Lain", "Bersih Sblm Kasbon", "Kasbon", "Gaji Bersih"]]
+    p, lines, _ = await _period(pid)
+    data = [["ID", "Nama", "Jam Dibayar", "Lembur", "Gaji Kotor", "Pot. Lain", "Bersih Sblm Kasbon", "Kasbon", "Gaji Bersih", "Koreksi", "Bersih Efektif"]]
     for ln in lines:
-        data.append([ln["code"], ln["full_name"][:28], "Harian Jam" if ln["payroll_mode"] == "hourly" else "Manual",
-                     hm(ln["durations"]["paid_minutes"]), hm(ln["overtime_minutes"]), rp(ln["gross"]), rp(ln["other_deduction"]),
-                     rp(ln["net_before_kasbon"]), rp(ln["kasbon_deduction"]), rp(ln["net_final"])])
+        data.append([ln["code"], ln["full_name"][:26], hm(ln["durations"]["paid_minutes"]), hm(ln["overtime_minutes"]),
+                     rp(ln["gross"]), rp(ln["other_deduction"]), rp(ln["net_before_kasbon"]), rp(ln["kasbon_deduction"]),
+                     rp(ln["net_final"]), rp(ln["adj_net"]), rp(ln["net_effective"])])
     t = p["totals"]
-    data.append(["", "TOTAL", "", "", "", rp(t.get("gross", 0)), rp(t.get("other_deduction", 0)), rp(t.get("net_before_kasbon", 0)),
-                 rp(t.get("kasbon_deduction", 0)), rp(t.get("net_final", 0))])
-    tbl = _tbl(data, [18 * mm, 52 * mm, 20 * mm, 22 * mm, 20 * mm, 28 * mm, 26 * mm, 32 * mm, 26 * mm, 28 * mm])
+    data.append(["", "TOTAL", "", "", rp(t.get("gross", 0)), rp(t.get("other_deduction", 0)), rp(t.get("net_before_kasbon", 0)),
+                 rp(t.get("kasbon_deduction", 0)), rp(t.get("net_final", 0)), rp(sum(x["adj_net"] for x in lines)),
+                 rp(sum(x["net_effective"] for x in lines))])
+    tbl = _tbl(data, [17 * mm, 46 * mm, 20 * mm, 18 * mm, 26 * mm, 22 * mm, 28 * mm, 24 * mm, 26 * mm, 24 * mm, 26 * mm])
     tbl.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("ALIGN", (3, 1), (-1, -1), "RIGHT")]))
     return _pdf(_head(p, "Rekap Gaji") + [tbl], landscape(A4), f"rekap-gaji-{pid}.pdf")
 
 
 @router.get("/periods/{pid}/slip/{eid}.pdf")
 async def slip_pdf(pid: int, eid: int, admin: dict = Depends(require_admin)):
-    p, lines = await _period(pid)
+    p, lines, adjs = await _period(pid)
     ln = next((x for x in lines if x["employee_id"] == eid), None)
     if not ln:
         err(404, "Slip tidak ditemukan")
@@ -168,6 +284,12 @@ async def slip_pdf(pid: int, eid: int, admin: dict = Depends(require_admin)):
             ["Gaji bersih sebelum kasbon", rp(ln["net_before_kasbon"])], ["Saldo kasbon", rp(ln["kasbon_balance"])],
             ["Potongan kasbon", "- " + rp(ln["kasbon_deduction"])], ["Sisa kasbon", rp(ln["kasbon_after"])],
             ["GAJI BERSIH AKHIR", rp(ln["net_final"])]]
+    mine = [a for a in adjs if a["employee_id"] == eid]
+    if mine:
+        for a in mine:
+            sign = "- " if a["kind"] == "deduction" else "+ "
+            det.append([f"Koreksi #{a['id']} {a['created_at'].astimezone(WIB):%d/%m/%Y}: {KIND_LABEL[a['kind']]} — {a['reason'][:50]}", sign + rp(a["amount"])])
+        det.append(["GAJI BERSIH SETELAH KOREKSI", rp(ln["net_effective"])])
     t = _tbl(det, [110 * mm, 60 * mm])
     t.setStyle(TableStyle([("ALIGN", (1, 1), (1, -1), "RIGHT"), ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                            ("FONTSIZE", (0, -1), (-1, -1), 10), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF0FB"))]))

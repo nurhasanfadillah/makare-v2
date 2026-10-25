@@ -13,7 +13,13 @@ User choices: Database = Neon PostgreSQL milik user (DATABASE_URL). Login = user
 ## Personas
 Administrator (full access), Operator Input (dashboard + today's attendance only), Kiosk publik (token link, no admin).
 
-## Implemented (2026-10-25)
+## Implemented (2026-10-25) — Koreksi Payroll
+- Table payroll_adjustments (earning / deduction / kasbon_reversal, reason ≥5 chars, before/after JSON, actor, time, idempotency key bound to payload). cash_advances kind 'reversal' for kasbon reversals (balance += amount).
+- API: POST /api/payroll/periods/{pid}/adjustments/preview (financial impact, no write), POST /api/payroll/periods/{pid}/adjustments (atomic, advisory lock, caps: deduction ≤ effective net, reversal ≤ effective kasbon deduction), audit 'payroll_adjusted'.
+- Original snapshot never changed; period detail shows net_final, adj_net, net_effective + correction history; periods list shows count/total; Rekap & Slip PDF include corrections; Kasbon page shows reversals.
+- Tested (iteration_2): backend 11/12 then fixed remaining (whitespace reason 500 → 422, key reuse with other payload → 409, PDF times WIB, closing end-date race).
+
+## Implemented (2026-10-25) — Rilis inti
 - Auth username/password, role enforcement server-side, login rate limit, audit log.
 - Dashboard (real DB data), Data Karyawan (CRUD, filter, auto ID KRY-0001, deactivate, rates, manual components), Departemen CRUD, Akun CRUD.
 - Absensi: Masuk/Keluar session (server time), Sakit/Izin/Alfa, admin historical input & correction with reason + before/after audit, early-leave PIN (6 digit, single-use, TTL, 5 attempts), overtime sessions (server rejects when disabled).
@@ -31,7 +37,7 @@ Administrator (full access), Operator Input (dashboard + today's attendance only
 - Late within tolerance credits full first hour (late adjustment positive).
 
 ## Backlog
-- P0: Mode Koreksi payroll (penyesuaian setelah tutup buku), Catatan Karyawan.
+- P0: Catatan Karyawan.
 - P1: Laporan (Daftar Karyawan PDF, Rekap Kehadiran PDF, Laporan Kehadiran/Penggajian/Kasbon), detail karyawan & riwayat perubahan.
 - P2: Performance (Neon region far from app ~200ms/roundtrip), backup/restore procedure doc, CI (GitHub Actions), shadcn date pickers, mobile card layout for Absensi.
 

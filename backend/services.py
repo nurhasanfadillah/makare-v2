@@ -140,7 +140,7 @@ async def build_payroll(conn, start: date, end: date, overrides: dict | None = N
     for o in await conn.fetch("SELECT * FROM overtime_sessions WHERE work_date BETWEEN $1 AND $2 ORDER BY check_in", start, end):
         ots[o["employee_id"]].append(o)
     balances = {r["employee_id"]: r["bal"] for r in await conn.fetch(
-        "SELECT employee_id, sum(CASE WHEN kind='grant' THEN amount ELSE -amount END) AS bal FROM cash_advances GROUP BY employee_id")}
+        "SELECT employee_id, sum(CASE WHEN kind='deduction' THEN -amount ELSE amount END) AS bal FROM cash_advances GROUP BY employee_id")}
     keys = ["raw_minutes", "break_minutes", "late_adjustment_minutes", "eligible_minutes", "rounded_minutes", "paid_minutes"]
     out, totals = [], defaultdict(int)
     for e in emps:
