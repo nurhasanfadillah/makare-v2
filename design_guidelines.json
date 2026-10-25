@@ -1,0 +1,119 @@
+{
+  "project_name": "MAKARE (Manajemen Karyawan Redone)",
+  "language": "Indonesian (ID)",
+  "design_archetype": "Swiss & High-Contrast / Banking-Grade Corporate SaaS",
+  "theme_mode": "Light Mode (Cool Canvas #F4F7FB) with High-Impact Gradient Accents",
+  "colors": {
+    "brand": {
+      "midnight_navy": "#0B1F3A",
+      "royal_blue": "#174EA6",
+      "gradient_blue": "#4F7DF3",
+      "cool_canvas": "#F4F7FB",
+      "surface": "#FFFFFF",
+      "main_text": "#172A46",
+      "sub_text": "#4A5568",
+      "border": "#E2E8F0"
+    },
+    "main_gradient": "linear-gradient(110deg, #174EA6 0%, #4F7DF3 100%)",
+    "main_gradient_tailwind": "bg-gradient-to-r from-[#174EA6] to-[#4F7DF3]",
+    "semantic": {
+      "success": "#10B981",
+      "success_light": "#ECFDF5",
+      "warning": "#F59E0B",
+      "warning_light": "#FFFBEB",
+      "error": "#EF4444",
+      "error_light": "#FEF2F2",
+      "info": "#3B82F6",
+      "info_light": "#EFF6FF"
+    }
+  },
+  "typography": {
+    "font_family_heading": "Plus Jakarta Sans, sans-serif",
+    "font_family_body": "Inter, sans-serif",
+    "scale": {
+      "h1_hero": "text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight",
+      "h2_section": "text-2xl sm:text-3xl lg:text-4xl font-semibold tracking-tight",
+      "h3_subsection": "text-xl sm:text-2xl font-semibold",
+      "h4_card": "text-lg sm:text-xl font-medium",
+      "body": "text-base text-[#172A46] leading-relaxed",
+      "caption": "text-xs font-medium uppercase tracking-[0.15em] text-[#4A5568]"
+    }
+  },
+  "layout_and_spacing": {
+    "density": "Balanced density with generous section padding (p-6 to p-8)",
+    "container_max_width": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6",
+    "card_style": "bg-white border border-[#E2E8F0] rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 p-6",
+    "hero_banner_style": "bg-gradient-to-r from-[#174EA6] to-[#4F7DF3] text-white rounded-2xl p-6 sm:p-8 shadow-lg relative overflow-hidden"
+  },
+  "kiosk_ui_specifications": {
+    "mode": "Public Kiosk Fullscreen Interface",
+    "background": "bg-[#0B1F3A] text-white",
+    "clock_display": "Server WIB Clock (Waktu Indonesia Barat) prominent top center, font-mono text-4xl sm:text-5xl font-bold text-[#4F7DF3]",
+    "touch_buttons": "Min height 64px, rounded-2xl, active scale transition, high-contrast states",
+    "toggle_button": "Reguler / Lembur segmented toggle with active state in Gradient Blue (#4F7DF3)",
+    "action_button": "Alternating Masuk (Green #10B981) / Keluar (Red #EF4444) big touch panel",
+    "employee_search": "Large touch keyboard / high visibility input for Employee Name or ID",
+    "confirmation_dialog": "Modal dialog with 5-second auto-close timeout, clear employee avatar/details, and instant feedback alert"
+  },
+  "roles_ui_behavior": {
+    "administrator": "Full access to Dashboard, Employees, Attendance, Overtime, Kasbon, Payroll, Tutup Buku, Settings, Audit Log",
+    "operator_input": "Restricted navigation bar — strictly limited to Today's Attendance view & manual check-in/out form",
+    "public_kiosk": "Standalone token-linked route, no header/sidebar navigation, fullscreen touch optimized"
+  },
+  "tutup_buku_wizard": {
+    "steps": ["1. Preview Summary", "2. Adjust Kasbon Deductions", "3. Final Confirmation & Lock Period"],
+    "styling": "Wizard stepper progress bar with active step in #174EA6, atomic transaction warnings, and downloadable payslip generator link"
+  },
+  "testing_attributes": {
+    "mandatory": "All interactive buttons, input fields, links, cards, tabs, and alerts MUST include unique kebab-case data-testid attributes.",
+    "examples": {
+      "login_button": "data-testid=\"login-submit-button\"",
+      "kiosk_clock": "data-testid=\"kiosk-wib-clock\"",
+      "kiosk_employee_input": "data-testid=\"kiosk-employee-search-input\"",
+      "attendance_checkin": "data-testid=\"attendance-checkin-button\"",
+      "tutup_buku_next": "data-testid=\"tutup-buku-wizard-next-step\"",
+      "employee_table": "data-testid=\"employee-list-table\""
+    }
+  },
+  "image_urls": {
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1770510067230-1059f0776b3a?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "Employee Avatar Male 1",
+        "description": "Young male corporate employee"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1758691737605-69a0e78bd193?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "Employee Avatar Female 1",
+        "description": "Smiling female corporate employee"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1758691737587-7630b4d31d16?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "Employee Avatar Female 2",
+        "description": "Female office staff"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1762341124796-530c0085f7d8?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "Employee Avatar Executive",
+        "description": "Executive female staff"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Ensure all components are built using React .js / .jsx (not TypeScript .tsx files).",
+    "Integrate lucide-react icons consistently throughout the app.",
+    "Use light background #F4F7FB with crisp white #FFFFFF cards for data readability.",
+    "Apply the main gradient linear-gradient(110deg, #174EA6 0%, #4F7DF3 100%) to hero cards, main dashboard header summary, and public kiosk highlights.",
+    "Ensure tables and forms remain light, crisp, and high-contrast (no gradient background on table rows).",
+    "Include Indonesian text for all user-facing labels (e.g., 'Absensi Hari Ini', 'Tutup Buku', 'Uang Muka / Kasbon', 'Gaji Pokok', 'Lembur', 'Jam Masuk', 'Jam Keluar').",
+    "All interactive and key informational elements MUST include data-testid attributes."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Avoid AI slop, centered generic layouts, and heavy unnatural dark gradients.",
+    "Use subtle borders (#E2E8F0) and soft shadows for depth.",
+    "Never use transparent backgrounds on dropdowns or modals — use solid bg-white with shadow-xl.",
+    "Ensure accessibility for focus and keyboard navigation.",
+    "Use Sonner for toast feedback alerts."
+  ]
+}

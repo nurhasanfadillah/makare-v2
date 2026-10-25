@@ -1,0 +1,62 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --mk-navy: #0B1F3A;
+        --mk-royal: #174EA6;
+        --mk-sky: #4F7DF3;
+        --mk-canvas: #F4F7FB;
+        --mk-text: #172A46;
+        --mk-sub: #4A5568;
+        --mk-gradient: linear-gradient(110deg, #174EA6 0%, #4F7DF3 100%);
+        --background: 216 50% 97%;
+        --foreground: 216 51% 18%;
+        --card: 0 0% 100%;
+        --card-foreground: 216 51% 18%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 216 51% 18%;
+        --primary: 217 76% 37%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 216 45% 94%;
+        --secondary-foreground: 216 51% 18%;
+        --muted: 216 40% 95%;
+        --muted-foreground: 218 17% 35%;
+        --accent: 220 80% 95%;
+        --accent-foreground: 217 76% 30%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 214 32% 89%;
+        --input: 214 32% 86%;
+        --ring: 223 87% 63%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+    * { @apply border-border; }
+    body {
+        @apply bg-background text-foreground antialiased;
+        font-family: "Plus Jakarta Sans", ui-sans-serif, sans-serif;
+    }
+    ::selection { background: #4F7DF3; color: #fff; }
+    :focus-visible { outline: 2px solid #4F7DF3; outline-offset: 2px; }
+}
+
+@layer components {
+    .mk-gradient { background: var(--mk-gradient); }
+    .mk-num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    .mk-card { @apply bg-white border border-border rounded-xl shadow-[0_1px_2px_rgba(11,31,58,0.04),0_4px_16px_rgba(11,31,58,0.04)]; }
+    .mk-eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground; }
+    .mk-hero-grid {
+        background-image: radial-gradient(circle at 85% 20%, rgba(255,255,255,0.18) 0, transparent 40%),
+            linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px),
+            var(--mk-gradient);
+        background-size: auto, 28px 28px, 28px 28px, auto;
+    }
+    .mk-fade { animation: mkfade .35s ease-out both; }
+}
+
+@keyframes mkfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
