@@ -44,3 +44,11 @@
 - Authorized GitHub CLI OAuth with the `workflow` scope through the device flow. The credential is held in the local GitHub CLI keyring, not in the repository. The PAT pasted into chat was revoked via GitHub's credential-revocation endpoint (HTTP 202).
 - Pushed `.github/workflows/ci.yml` and fixed its test dependency declaration (`pytest-xdist==3.8.0`, required by the repository's `pytest.ini`).
 - GitHub Actions run `41188865261` completed successfully: backend isolated tests and `pip-audit`, plus Yarn runtime dependency audit and frontend production build.
+
+## 2026-10-31 - Correct Vercel account and automatic production deployment
+
+- Re-authenticated Vercel in a separate local CLI profile as `nurhasanfadillah` after confirming the previously selected `jisoiofficial-5347` account was wrong. Created separate frontend/API projects in the correct account and connected both to `nurhasanfadillah/makare-v2` on `main` (roots `frontend` and `backend`).
+- Configured production API environment variables from the ignored local backend environment without printing secret values. The first deployment exposed a missing explicit `CORS_ORIGINS` setting; set it to the production frontend origin and redeployed.
+- Commit `104dd52` routes frontend `/api/*` requests to the new API production alias. Both GitHub-triggered deployments reached Ready; the API deployment was then redeployed with the CORS fix.
+- Verified frontend root HTTP 200, frontend `/api/health` HTTP 200 with `status=ready` and `database=connected`, and direct API health HTTP 200 with the same readiness result. Latest GitHub Actions run `41190163574` passed.
+- Stable production URLs: frontend `https://makare-v2-zeta.vercel.app`; API health `https://makare-v2-api-five.vercel.app/api/health`. Project-state doc now reflects the correct account and deployment status.
