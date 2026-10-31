@@ -27,7 +27,7 @@ Last updated: 2026-10-31
 - Run full security, dependency, accessibility/mobile, and cross-module audit; fix and retest findings.
 - Execute and document Neon backup/restore recovery on an isolated branch, review provider retention, and finish rollback/incident runbooks.
 - Run owner UAT and approve payroll/business examples, retention, and operational SOP.
-- Push reviewed source to GitHub and confirm the new CI workflow runs successfully; Vercel deployments so far were CLI deployments from this workspace.
+- Reviewed source commit `ded1e4b` is pushed to GitHub main. CI workflow file is prepared locally but not pushed because the available GitHub OAuth token lacks `workflow` scope; authenticate once with that scope, then push the workflow and confirm its run. Vercel deployments so far were CLI deployments from this workspace.
 
 ## Locked baseline
 

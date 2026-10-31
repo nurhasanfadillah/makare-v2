@@ -20,3 +20,12 @@
 - Frontend production build succeeded; isolated backend suite passed (133). `git diff --check` passed.
 - Latest live API suite against the empty database: 15 passed, 1 failed because the RBAC projection test required at least one employee. Updated the assertion to accept an empty list and to validate privacy for all rows present; the full live suite still needs a rerun. A token emitted by pytest output was invalidated by incrementing all user session versions during cleanup.
 - Release gates remain: rerun the corrected live acceptance, finish module-by-module audit, dependency/security/accessibility/mobile review, isolated Neon restore drill, owner UAT, and GitHub CI verification.
+
+
+## 2026-10-31 ? Final live acceptance and credential response
+
+- Corrected empty-installation RBAC acceptance, then reran the complete production API suite: 16 passed. Prepared a two-day historical payroll fixture, checked the expected Rp240.000 gross / Rp200.000 kasbon / Rp40.000 net snapshot, and ran payroll-correction API suite: 12 passed.
+- Removed all synthetic acceptance rows in one transaction after tests. Final counts verified: 2 app users, 4 departments, 1 settings row, 2 migrations, 1 cleanup audit event; employee, attendance, overtime, notes, payroll, advance, and adjustment rows all 0. Default app settings restored and all sessions revoked.
+- A credential scan found old Neon, GitHub, and Vercel credentials embedded in the supplied build prompt. Replaced them with placeholders before any successful push; GitHub accepted revocation (HTTP 202), Vercel accepted revocation (HTTP 200), and the Neon role password was rotated and synchronized to Vercel/local configuration. The first GitHub push was blocked by secret scanning; the identified credentials were removed/revoked, and the sanitized source then pushed successfully.
+- Updated local development API target to port 8002 and CORS origins; restarted API with the rotated Neon URL. Local health, production health, admin login, and operator login returned success.
+- GitHub commit `ded1e4b` is on main. CI workflow remains local because the available OAuth authorization lacks `workflow` scope. Comprehensive security, accessibility/mobile, backup/restore, UAT, and module-by-module release audit remain open.
