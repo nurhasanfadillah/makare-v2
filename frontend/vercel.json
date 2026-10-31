@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://makare-v2-api.vercel.app/api/:path*"
+      "destination": "https://makare-v2-api-five.vercel.app/api/:path*"
     },
     {
       "source": "/(.*)",
