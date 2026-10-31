@@ -83,7 +83,7 @@ def _check_result(res):
 @router.post("/attendance/clock")
 async def staff_clock(body: ClockIn, request: Request, user: dict = Depends(current_user)):
     if body.early_pin:
-        rate_limit(request, f"pin:{body.employee_id}", 10, 300)
+        await rate_limit(request, f"pin:{body.employee_id}", 10, 300)
     pool = await get_pool()
     async with pool.acquire() as c:
         return _check_result(await clock(c, body.employee_id, body.mode, body.action, user["username"], "panel", body.early_pin))
@@ -247,7 +247,7 @@ def _kt_hash(token: str) -> str:
 
 
 async def _kiosk_cfg(c, token: str, request: Request) -> dict:
-    rate_limit(request, "kiosk", 240, 60)
+    await rate_limit(request, "kiosk", 240, 60, connection=c)
     # Kiosk authorization must observe rotations/disablement immediately on every instance.
     cfg = await c.fetchval("SELECT value FROM settings WHERE key='app'") or {}
     if not cfg.get("kiosk_enabled") or not secrets.compare_digest(token, cfg.get("kiosk_token", "")):
@@ -290,7 +290,7 @@ async def kiosk_state(token: str, eid: int, request: Request):
 
 @router.post("/kiosk/{token}/overtime-unlock")
 async def kiosk_ot_unlock(token: str, body: dict, request: Request):
-    rate_limit(request, "kiosk_pin", 5, 300)
+    await rate_limit(request, "kiosk_pin", 5, 300)
     scope = kiosk_pin_scope(token, client_ip(request))
     pool = await get_pool()
     async with pool.acquire() as c:
@@ -323,9 +323,9 @@ class KioskClockIn(ClockIn):
 
 @router.post("/kiosk/{token}/clock")
 async def kiosk_clock(token: str, body: KioskClockIn, request: Request):
-    rate_limit(request, "kiosk_clock", 30, 60)
+    await rate_limit(request, "kiosk_clock", 30, 60)
     if body.early_pin:
-        rate_limit(request, f"pin:{body.employee_id}", 10, 300)
+        await rate_limit(request, f"pin:{body.employee_id}", 10, 300)
     pool = await get_pool()
     async with pool.acquire() as c:
         await _kiosk_cfg(c, token, request)

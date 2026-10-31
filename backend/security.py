@@ -65,7 +65,8 @@ class LoginIn(BaseModel):
 
 @router.post("/login")
 async def login(body: LoginIn, request: Request):
-    rate_limit(request, f"login:{body.username.lower()}", 8, 300)
+    await rate_limit(request, f"login:{body.username.lower()}", 8, 300)
+    await rate_limit(request, "login-ip", 60, 300)
     pool = await get_pool()
     u = await pool.fetchrow("SELECT * FROM users WHERE username=$1", body.username.strip().lower())
     if not u or not u["active"] or not verify_secret(body.password, u["password_hash"]):

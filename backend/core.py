@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from collections import defaultdict, deque
+import hashlib
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -102,7 +102,7 @@ async def ensure_open_date(conn, d: date):
         err(409, "Tanggal berada dalam periode yang sudah tutup buku")
 
 
-_hits = defaultdict(deque)
+_last_rate_limit_cleanup = 0.0
 
 
 def client_ip(request: Request) -> str:
@@ -110,16 +110,36 @@ def client_ip(request: Request) -> str:
     return (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[-1].strip()
 
 
-def rate_limit(request: Request, bucket: str, limit: int, window: int):
+async def rate_limit(request: Request, bucket: str, limit: int, window: int, connection=None):
+    """Enforce a shared, database-backed fixed-window limit across API instances."""
+    global _last_rate_limit_cleanup
     ip = client_ip(request)
-    key = f"{bucket}:{ip}"
-    q = _hits[key]
-    t = time.monotonic()
-    while q and t - q[0] > window:
-        q.popleft()
-    if len(q) >= limit:
+    key = hashlib.sha256(f"{bucket}:{ip}".encode("utf-8")).hexdigest()
+    own_connection = connection is None
+    if own_connection:
+        pool = await get_pool()
+        connection = await pool.acquire()
+    try:
+        now = time.monotonic()
+        if now - _last_rate_limit_cleanup >= 300:
+            await connection.execute("DELETE FROM api_rate_limits WHERE expires_at <= now()")
+            _last_rate_limit_cleanup = now
+        hits = await connection.fetchval(
+            "INSERT INTO api_rate_limits(bucket_hash, window_started_at, hits, expires_at) "
+            "VALUES($1, now(), 1, now() + ($2 * interval '1 second')) "
+            "ON CONFLICT(bucket_hash) DO UPDATE SET "
+            "hits=CASE WHEN api_rate_limits.window_started_at <= now() - ($2 * interval '1 second') "
+            "THEN 1 ELSE api_rate_limits.hits + 1 END, "
+            "window_started_at=CASE WHEN api_rate_limits.window_started_at <= now() - ($2 * interval '1 second') "
+            "THEN now() ELSE api_rate_limits.window_started_at END, "
+            "expires_at=now() + ($2 * interval '1 second') RETURNING hits",
+            key, window,
+        )
+    finally:
+        if own_connection:
+            await pool.release(connection)
+    if hits > limit:
         err(429, "Terlalu banyak percobaan. Coba lagi beberapa saat.")
-    q.append(t)
 
 
 def row(r):

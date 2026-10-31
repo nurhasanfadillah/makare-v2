@@ -29,3 +29,11 @@
 - A credential scan found old Neon, GitHub, and Vercel credentials embedded in the supplied build prompt. Replaced them with placeholders before any successful push; GitHub accepted revocation (HTTP 202), Vercel accepted revocation (HTTP 200), and the Neon role password was rotated and synchronized to Vercel/local configuration. The first GitHub push was blocked by secret scanning; the identified credentials were removed/revoked, and the sanitized source then pushed successfully.
 - Updated local development API target to port 8002 and CORS origins; restarted API with the rotated Neon URL. Local health, production health, admin login, and operator login returned success.
 - GitHub commit `ded1e4b` is on main. CI workflow remains local because the available OAuth authorization lacks `workflow` scope. Comprehensive security, accessibility/mobile, backup/restore, UAT, and module-by-module release audit remain open.
+
+
+## 2026-10-31 ? Shared rate limiter and final cleanup
+
+- Replaced per-process API rate limits with atomic Neon-backed fixed-window buckets; migration `003_database_rate_limits.sql` is live. Parallel login smoke produced 8 expected failed-login responses and 4 rate-limit responses from 12 same-bucket attempts.
+- Upgraded FastAPI/Starlette and patched frontend dependency resolutions; backend isolated suite: 135 passed; Python runtime audit and Yarn runtime audit are clean. The full Yarn audit reports three low `deepmerge` advisories in build/test tooling.
+- Re-ran final transactional cleanup after the last live smoke. Verified: 2 users, 4 departments, 1 settings row, 3 migrations, 1 cleanup audit event; zero employees, attendance, overtime, employee notes/revisions, payroll periods/snapshots, advances, adjustments, or rate-limit buckets. Revoked all existing sessions.
+- Updated deployment/readiness records. CI workflow remains local because GitHub authorization lacks the `workflow` scope. Latest implementation files are not yet committed/pushed. The comprehensive module trace, browser accessibility audit, isolated backup/restore drill, hosted CI run, and owner UAT remain release gates.

@@ -21,7 +21,7 @@ vercel --cwd backend --prod --yes
 vercel --cwd frontend --prod --yes
 ```
 
-The API lifespan checks/applies pending versioned migrations before serving requests. Current live ledger contains `001_initial_schema.sql` and `002_user_session_revocation.sql`. Do not edit applied SQL files; add a numbered migration.
+The API lifespan checks/applies pending versioned migrations before serving requests. Current live ledger contains `001_initial_schema.sql`, `002_user_session_revocation.sql`, and `003_database_rate_limits.sql`. Do not edit applied SQL files; add a numbered migration.
 
 ## Credentials and rotation
 
