@@ -23,7 +23,7 @@ jobs:
         working-directory: backend
       - name: Run isolated backend tests
         run: >-
-          python -m pytest -n 0 -q
+          python -m pytest -q
           tests/test_rate_limit.py
           tests/test_config.py
           tests/test_kiosk_security.py
