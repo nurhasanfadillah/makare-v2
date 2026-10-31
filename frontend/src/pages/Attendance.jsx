@@ -25,17 +25,22 @@ export default function Attendance() {
   const { isAdmin } = useAuth();
   const [date, setDate] = useState("");
   const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(null);
   const [entry, setEntry] = useState(null);
   const [pinAsk, setPinAsk] = useState(null);
   const [pinShow, setPinShow] = useState(null);
 
-  const load = useCallback(() => {
-    api.get("/attendance", { params: date ? { work_date: date } : {} }).then((r) => {
+  const load = useCallback(async () => {
+    setLoading(true); setLoadError("");
+    try {
+      const r = await api.get("/attendance", { params: date ? { work_date: date } : {} });
       setData(r.data);
       if (!date) setDate(r.data.date);
-    }).catch((e) => toast.error(errMsg(e)));
+    } catch (e) { setData(null); setLoadError(errMsg(e)); }
+    finally { setLoading(false); }
   }, [date]);
   useEffect(() => { load(); }, [load]);
 
@@ -75,7 +80,8 @@ export default function Attendance() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
-  if (!data) return <Loading />;
+  if (loading && !data) return <Loading />;
+  if (!data) return <div><PageHeader eyebrow="Absensi" title="Absensi" /><EmptyState title="Data absensi gagal dimuat" hint={loadError} action={<Button onClick={load}>Coba lagi</Button>} /></div>;
   const list = data.rows.filter((r) => `${r.code} ${r.full_name}`.toLowerCase().includes(q.toLowerCase()));
 
   return (
@@ -84,6 +90,8 @@ export default function Attendance() {
         actions={isAdmin && (
           <Input type="date" max={data.today} value={date} onChange={(e) => setDate(e.target.value)} className="w-44 bg-white" data-testid="attendance-date-input" />
         )} />
+      {loading && <div className="mb-3 text-sm text-muted-foreground" role="status">Memuat data terbaru…</div>}
+      {loadError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="alert">Data terbaru gagal dimuat: {loadError} <Button variant="link" onClick={load}>Coba lagi</Button></div>}
       {data.locked && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="attendance-locked-alert">
           <Lock className="h-4 w-4" /> Tanggal ini berada dalam periode yang sudah tutup buku. Data hanya dapat dilihat.

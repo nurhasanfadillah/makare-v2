@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldCheck, AlertTriangle, Lock } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldCheck, AlertTriangle, Lock, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,29 @@ function Totals({ t }) {
   );
 }
 
+function PeriodComponents({ line, value, onChange }) {
+  const components = value ?? line.components ?? [];
+  const update = (index, key, next) => onChange(components.map((item, i) => i === index ? { ...item, [key]: next } : item));
+  return (
+    <div className="border-t bg-slate-50 p-4" data-testid={`period-components-${line.code}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div><div className="text-sm font-semibold text-[#0B1F3A]">Komponen gaji periode ini</div><div className="text-xs text-muted-foreground">Perubahan hanya berlaku untuk periode ini. Klik Hitung Ulang sebelum menyetujui total.</div></div>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onChange([...components, { name: "", amount: 0, volume: 1, note: "" }])} data-testid={`add-period-component-${line.code}`}><Plus className="h-3.5 w-3.5 mr-1" />Tambah komponen</Button>
+      </div>
+      {components.length === 0 && <div className="mb-3 text-xs text-muted-foreground">Belum ada komponen; tambahkan bonus, insentif, atau komponen penghasilan periode ini.</div>}
+      <div className="space-y-2">{components.map((component, index) => (
+        <div className="grid grid-cols-12 gap-2" key={`${component.name}-${index}`} data-testid={`period-component-row-${line.code}-${index}`}>
+          <Input disabled={busy} className="col-span-12 sm:col-span-4" aria-label="Nama komponen periode" placeholder="Nama komponen" value={component.name} onChange={(e) => update(index, "name", e.target.value)} />
+          <Input disabled={busy} className="col-span-5 sm:col-span-3" aria-label="Nominal komponen periode" type="number" min="0" step="1" placeholder="Nominal Rp" value={component.amount} onChange={(e) => update(index, "amount", e.target.value === "" ? 0 : Number(e.target.value))} />
+          <Input disabled={busy} className="col-span-3 sm:col-span-2" aria-label="Volume komponen periode" type="number" min="0" step="0.01" placeholder="Volume" value={component.volume} onChange={(e) => update(index, "volume", e.target.value === "" ? 0 : Number(e.target.value))} />
+          <Input disabled={busy} className="col-span-3 sm:col-span-2" aria-label="Keterangan komponen periode" placeholder="Keterangan" value={component.note || ""} onChange={(e) => update(index, "note", e.target.value)} />
+          <Button disabled={busy} className="col-span-1" type="button" variant="ghost" size="icon" aria-label="Hapus komponen periode" onClick={() => onChange(components.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4 text-red-600" /></Button>
+        </div>
+      ))}</div>
+    </div>
+  );
+}
+
 export default function Closing() {
   const nav = useNavigate();
   const [period, setPeriod] = useState(null);
@@ -45,11 +68,17 @@ export default function Closing() {
   const [open, setOpen] = useState({});
   const [busy, setBusy] = useState(false);
   const [agree, setAgree] = useState(false);
+  const [periodError, setPeriodError] = useState("");
+  const [periodLoading, setPeriodLoading] = useState(true);
   const idem = useRef(crypto.randomUUID());
 
-  useEffect(() => {
-    api.get("/payroll/next-period").then((r) => { setPeriod(r.data); setEnd((v) => v || r.data.max_end_date); }).catch((e) => toast.error(errMsg(e)));
+  const loadPeriod = useCallback(async () => {
+    setPeriodLoading(true); setPeriodError("");
+    try { const r = await api.get("/payroll/next-period"); setPeriod(r.data); setEnd((v) => v || r.data.max_end_date); }
+    catch (e) { setPeriod(null); setPeriodError(errMsg(e)); }
+    finally { setPeriodLoading(false); }
   }, []);
+  useEffect(() => { loadPeriod(); }, [loadPeriod]);
 
   const run = async (nextStep) => {
     setBusy(true);
@@ -60,7 +89,13 @@ export default function Closing() {
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
-  const setA = (eid, k, v) => setAdj({ ...adj, [eid]: { ...adj[eid], [k]: v === "" ? (k === "kasbon_deduction" ? null : 0) : Number(v) } });
+  const setA = (eid, k, v) => setAdj((prev) => ({ ...prev, [eid]: { ...prev[eid], [k]: v === "" ? (k === "kasbon_deduction" ? null : 0) : Number(v) } }));
+  const setComponents = (eid, components) => setAdj((prev) => ({ ...prev, [eid]: { ...prev[eid], components } }));
+  const toggleLine = (line) => {
+    const isOpening = !open[line.employee_id];
+    setOpen((prev) => ({ ...prev, [line.employee_id]: isOpening }));
+    if (isOpening) setAdj((prev) => ({ ...prev, [line.employee_id]: { ...prev[line.employee_id], components: prev[line.employee_id]?.components ?? line.components.map((c) => ({ ...c })) } }));
+  };
 
   const finalize = async () => {
     setBusy(true);
@@ -71,7 +106,8 @@ export default function Closing() {
     } catch (e) { toast.error(errMsg(e)); setBusy(false); }
   };
 
-  if (!period) return <Loading />;
+  if (periodLoading) return <Loading />;
+  if (!period) return <div><PageHeader eyebrow="Penggajian" title="Tutup Buku" /><EmptyState title="Periode payroll gagal dimuat" hint={periodError} action={<Button onClick={loadPeriod}>Coba lagi</Button>} /></div>;
   const startAfterEnd = period.start_date > period.max_end_date;
   const incomplete = preview?.lines.reduce((s, l) => s + l.counts.incomplete, 0) || 0;
 
@@ -105,7 +141,7 @@ export default function Closing() {
                 <tbody>{preview.lines.map((l) => (
                   <Fragment key={l.employee_id}>
                     <tr className="border-t" data-testid={`preview-row-${l.code}`}>
-                      <td className="px-3 py-2"><button onClick={() => setOpen({ ...open, [l.employee_id]: !open[l.employee_id] })} aria-label="Rincian" data-testid={`preview-expand-${l.code}`}>{open[l.employee_id] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button></td>
+                      <td className="px-3 py-2"><button onClick={() => toggleLine(l)} aria-label="Rincian dan komponen gaji" data-testid={`preview-expand-${l.code}`}>{open[l.employee_id] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button></td>
                       <td className="px-3 py-2"><div className="font-medium">{l.full_name}</div><div className="text-xs text-muted-foreground mk-num">{l.code} · {l.payroll_mode === "hourly" ? "Harian Jam" : "Manual"}</div></td>
                       <td className="px-3 py-2 text-right mk-num">{l.payroll_mode === "hourly" ? dur(l.durations.paid_minutes) : "—"}</td>
                       <td className="px-3 py-2 text-right mk-num">{dur(l.overtime_minutes)}</td>
@@ -115,7 +151,7 @@ export default function Closing() {
                       <td className="px-3 py-2 text-right"><Input type="number" min="0" max={l.kasbon_cap} disabled={l.kasbon_cap === 0} className="h-8 w-32 ml-auto text-right" defaultValue={l.kasbon_deduction} onChange={(e) => setA(l.employee_id, "kasbon_deduction", e.target.value)} data-testid={`kasbon-deduction-${l.code}`} /><div className="text-[11px] text-muted-foreground">maks {rupiah(l.kasbon_cap)}</div></td>
                       <td className="px-3 py-2 text-right mk-num font-semibold text-[#0B1F3A]" data-testid={`net-final-${l.code}`}>{rupiah(l.net_final)}</td>
                     </tr>
-                    {open[l.employee_id] && <tr><td colSpan={9} className="p-0"><PayrollBreakdown line={l} /></td></tr>}
+                    {open[l.employee_id] && <tr><td colSpan={9} className="p-0"><PayrollBreakdown line={l} /><PeriodComponents line={l} value={adj[l.employee_id]?.components} onChange={(components) => setComponents(l.employee_id, components)} /></td></tr>}
                   </Fragment>
                 ))}</tbody>
               </table>

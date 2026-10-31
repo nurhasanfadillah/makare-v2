@@ -7,20 +7,23 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-from core import get_pool, close_pool
+from core import get_migration_pool, close_pool
+from config import parse_cors_origins
 from schema import init_db
 import security
 import routes_admin
 import routes_attendance
 import routes_payroll
+import routes_reports
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("makare")
+CORS_ORIGINS = parse_cors_origins(os.environ.get("CORS_ORIGINS"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db(await get_pool())
+    await init_db(await get_migration_pool())
     yield
     await close_pool()
 
@@ -45,13 +48,23 @@ async def root():
     return {"app": "MAKARE", "status": "ok"}
 
 
-for r in (security.router, routes_admin.router, routes_attendance.router, routes_payroll.router):
+@app.get("/api/health")
+async def health():
+    """Readiness probe for the deployed API and its configured database."""
+    from core import get_pool
+
+    pool = await get_pool()
+    await pool.fetchval("SELECT 1")
+    return {"app": "MAKARE", "status": "ready", "database": "connected"}
+
+
+for r in (security.router, routes_admin.router, routes_attendance.router, routes_payroll.router, routes_reports.router):
     app.include_router(r)
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

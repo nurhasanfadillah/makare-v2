@@ -1,0 +1,19 @@
+services:
+  makare-db-dev:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: makare_dev
+      POSTGRES_USER: makare_dev
+      POSTGRES_PASSWORD: ${MAKARE_DB_PASSWORD:-makare-local-only}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - makare_pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U makare_dev -d makare_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  makare_pgdata_dev:

@@ -1,5 +1,8 @@
 import io
+import hashlib
+import json
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -20,9 +23,30 @@ from services import next_period, build_payroll, finalize_closing
 router = APIRouter(prefix="/api/payroll")
 
 
+class PeriodComponentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    amount: int = Field(ge=0, le=9_000_000_000_000_000)
+    volume: Decimal = Field(default=Decimal("1"), ge=0, max_digits=10, decimal_places=2)
+    note: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def trim_name(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Nama komponen tidak boleh kosong")
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def trim_note(cls, value):
+        return value.strip() or None if value is not None else None
+
+
 class AdjustIn(BaseModel):
     kasbon_deduction: Optional[int] = Field(default=None, ge=0)
     other_deduction: Optional[int] = Field(default=0, ge=0)
+    components: Optional[list[PeriodComponentIn]] = Field(default=None, max_length=50)
 
 
 class PreviewIn(BaseModel):
@@ -42,7 +66,19 @@ async def get_next_period(admin: dict = Depends(require_admin)):
 
 
 def _ov(adj):
-    return {k: v.model_dump() for k, v in adj.items()}
+    out = {}
+    for eid, value in adj.items():
+        item = value.model_dump(exclude_none=True)
+        if value.components is not None:
+            item["components"] = [{**component.model_dump(), "volume": float(component.volume)} for component in value.components]
+        out[eid] = item
+    return out
+
+
+def _finalize_payload_hash(end_date: date, adjustments: dict) -> str:
+    normalized = {"end_date": end_date.isoformat(), "adjustments": _ov(adjustments)}
+    encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 @router.post("/preview")
@@ -59,8 +95,10 @@ async def preview(body: PreviewIn, admin: dict = Depends(require_admin)):
 @router.post("/finalize")
 async def finalize(body: FinalizeIn, admin: dict = Depends(require_admin)):
     pool = await get_pool()
+    adjustments = _ov(body.adjustments)
+    payload_hash = _finalize_payload_hash(body.end_date, body.adjustments)
     async with pool.acquire() as c:
-        return await finalize_closing(c, body.end_date, body.idempotency_key, _ov(body.adjustments), admin["username"])
+        return await finalize_closing(c, body.end_date, body.idempotency_key, adjustments, admin["username"], payload_hash)
 
 
 DELTA_SQL = "CASE WHEN kind='deduction' THEN -amount ELSE amount END"
@@ -70,7 +108,7 @@ DELTA_SQL = "CASE WHEN kind='deduction' THEN -amount ELSE amount END"
 async def periods(admin: dict = Depends(require_admin)):
     pool = await get_pool()
     return rows(await pool.fetch(
-        "SELECT p.id, p.start_date, p.end_date, p.totals, p.closed_by, p.closed_at, "
+        "SELECT p.id, p.start_date, p.end_date, p.totals, p.closed_by, p.closed_at, 'closed' AS status, "
         f"(SELECT coalesce(sum({DELTA_SQL}),0) FROM payroll_adjustments a WHERE a.period_id=p.id) AS adjustment_net, "
         "(SELECT count(*) FROM payroll_adjustments a WHERE a.period_id=p.id) AS adjustment_count "
         "FROM payroll_periods p ORDER BY p.end_date DESC"))
@@ -102,6 +140,7 @@ async def period_detail(pid: int, admin: dict = Depends(require_admin)):
     p, lines, adjs = await _period(pid)
     out = row(p)
     out.pop("idempotency_key", None)
+    out.pop("finalize_payload_hash", None)
     for a in adjs:
         a.pop("idempotency_key", None)
     return {**out, "lines": lines, "adjustments": rows(adjs),
@@ -275,7 +314,7 @@ async def slip_pdf(pid: int, eid: int, admin: dict = Depends(require_admin)):
     if ln["payroll_mode"] == "hourly":
         det += [["Durasi aktual", hm(d["raw_minutes"])], ["Durasi istirahat", hm(d["break_minutes"])],
                 ["Penyesuaian keterlambatan", hm(d["late_adjustment_minutes"])], ["Durasi memenuhi syarat", hm(d["eligible_minutes"])],
-                ["Hasil pembulatan", hm(d["rounded_minutes"])], ["Jam dibayar", hm(d["paid_minutes"])],
+                ["Hasil pengakuan (jam penuh)", hm(d["rounded_minutes"])], ["Jam dibayar", hm(d["paid_minutes"])],
                 [f"Gaji reguler ({rp(ln['regular_rate'])}/jam)", rp(ln["regular_amount"])],
                 [f"Lembur {hm(ln['overtime_minutes'])} ({rp(ln['overtime_rate'])}/jam)", rp(ln["overtime_amount"])]]
     for comp in ln["components"]:

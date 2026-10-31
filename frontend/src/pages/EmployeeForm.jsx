@@ -42,19 +42,24 @@ export default function EmployeeForm({ open, onClose, employeeId, departments, o
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!open) return;
     setF(EMPTY);
     setCode("");
-    if (!employeeId) return;
+    setLoadError("");
+    if (!employeeId) { setLoading(false); return; }
+    let active = true;
     setLoading(true);
     api.get(`/employees/${employeeId}`).then(({ data }) => {
+      if (!active) return;
       setCode(data.code);
       setF({ ...EMPTY, ...Object.fromEntries(Object.keys(EMPTY).map((k) => [k, data[k] ?? EMPTY[k]])), department_id: data.department_id || "" });
-    }).catch((e) => { toast.error(errMsg(e)); onClose(); }).finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, employeeId]);
+    }).catch((e) => { if (active) setLoadError(errMsg(e)); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, employeeId, loadAttempt]);
 
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
@@ -83,7 +88,10 @@ export default function EmployeeForm({ open, onClose, employeeId, departments, o
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" data-testid="employee-form-dialog">
         <DialogHeader><DialogTitle>{employeeId ? `Edit Karyawan · ${code}` : "Tambah Karyawan"}</DialogTitle></DialogHeader>
-        {loading ? <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground" data-testid="employee-form-loading"><Loader2 className="h-5 w-5 animate-spin" />Memuat data karyawan…</div> : (
+        {loading ? <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground" data-testid="employee-form-loading"><Loader2 className="h-5 w-5 animate-spin" />Memuat data karyawan…</div> : loadError ? (
+          <div className="py-12 text-center" role="alert"><p className="text-sm text-red-700">Data karyawan gagal dimuat: {loadError}</p>
+            <Button className="mt-4" variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Coba lagi</Button></div>
+        ) : (
         <form onSubmit={save} className="space-y-6">
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="ID Karyawan" hint="Dibuat otomatis dan tidak dapat diubah">

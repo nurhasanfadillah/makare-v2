@@ -1,5 +1,4 @@
 import os
-import time
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -35,9 +34,6 @@ def decode_token(token: str) -> dict:
         err(401, "Sesi tidak valid atau kedaluwarsa")
 
 
-_user_cache: dict = {}
-
-
 async def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
     if not cred:
         err(401, "Silakan masuk terlebih dahulu")
@@ -45,20 +41,15 @@ async def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> 
     if claims.get("typ") != "session":
         err(401, "Sesi tidak valid")
     uid = int(claims["sub"])
-    hit = _user_cache.get(uid)
-    if hit and time.monotonic() - hit[1] < 20:
-        return dict(hit[0])
     pool = await get_pool()
-    u = await pool.fetchrow("SELECT id, username, full_name, role, active FROM users WHERE id=$1", uid)
+    u = await pool.fetchrow("SELECT id, username, full_name, role, active, session_version FROM users WHERE id=$1", uid)
     if not u or not u["active"]:
-        _user_cache.pop(uid, None)
         err(401, "Akun tidak aktif")
-    _user_cache[uid] = (dict(u), time.monotonic())
-    return dict(u)
-
-
-def forget_user(uid: int):
-    _user_cache.pop(uid, None)
+    if claims.get("sv", 0) != u["session_version"]:
+        err(401, "Sesi telah dicabut. Silakan masuk kembali.")
+    result = dict(u)
+    result.pop("session_version", None)
+    return result
 
 
 async def require_admin(user: dict = Depends(current_user)) -> dict:
@@ -83,8 +74,18 @@ async def login(body: LoginIn, request: Request):
         err(401, "Username atau kata sandi salah")
     async with pool.acquire() as c:
         await audit(c, u["username"], "login", "auth", u["id"])
-    token = make_token({"sub": str(u["id"]), "role": u["role"], "typ": "session"}, 12)
+    token = make_token({"sub": str(u["id"]), "role": u["role"], "sv": u["session_version"], "typ": "session"}, 12)
     return {"token": token, "user": {"id": u["id"], "username": u["username"], "full_name": u["full_name"], "role": u["role"]}}
+
+
+@router.post("/logout")
+async def logout(user: dict = Depends(current_user)):
+    pool = await get_pool()
+    async with pool.acquire() as c:
+        async with c.transaction():
+            await c.execute("UPDATE users SET session_version=session_version+1 WHERE id=$1", user["id"])
+            await audit(c, user["username"], "logout", "auth", user["id"], after={"sessions_revoked": True})
+    return {"ok": True}
 
 
 @router.get("/me")

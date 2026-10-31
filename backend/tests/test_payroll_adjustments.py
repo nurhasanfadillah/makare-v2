@@ -8,6 +8,10 @@ import pytest
 import requests
 
 API = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/") + "/api"
+ADMIN_USERNAME = os.environ.get("MAKARE_TEST_ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("MAKARE_TEST_ADMIN_PASSWORD")
+OPERATOR_USERNAME = os.environ.get("MAKARE_TEST_OPERATOR_USERNAME", "operator")
+OPERATOR_PASSWORD = os.environ.get("MAKARE_TEST_OPERATOR_PASSWORD")
 S = {}
 
 
@@ -19,12 +23,14 @@ def login(u, p):
 
 @pytest.fixture(scope="module")
 def admin():
-    return login("admin", "admin123")
+    assert ADMIN_PASSWORD, "Set MAKARE_TEST_ADMIN_PASSWORD in the test environment"
+    return login(ADMIN_USERNAME, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")
 def oper():
-    return login("operator", "operator123")
+    assert OPERATOR_PASSWORD, "Set MAKARE_TEST_OPERATOR_PASSWORD in the test environment"
+    return login(OPERATOR_USERNAME, OPERATOR_PASSWORD)
 
 
 def key():

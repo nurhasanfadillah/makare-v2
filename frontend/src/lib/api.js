@@ -1,6 +1,9 @@
 import axios from "axios";
 
-export const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// Production serves the API through a same-origin Vercel rewrite. Local
+// development can still point at a separate backend through .env.
+const backendBase = (process.env.REACT_APP_BACKEND_URL || "").replace(/\/$/, "");
+export const API = `${backendBase}/api`;
 export const TOKEN_KEY = "makare_token";
 
 export const api = axios.create({ baseURL: API });

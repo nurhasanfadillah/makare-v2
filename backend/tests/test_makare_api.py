@@ -1,14 +1,20 @@
 # MAKARE end-to-end API regression tests (ordered; run as one module).
 # NOTE: finalizes ONE payroll period (end = yesterday) near the end – permanent on Neon DB.
 import os
+import secrets
 import uuid
 from datetime import date, timedelta
 
 import pytest
 import requests
+from core import today_wib
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
 API = f"{BASE_URL}/api"
+ADMIN_USERNAME = os.environ.get("MAKARE_TEST_ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("MAKARE_TEST_ADMIN_PASSWORD")
+OPERATOR_USERNAME = os.environ.get("MAKARE_TEST_OPERATOR_USERNAME", "operator")
+OPERATOR_PASSWORD = os.environ.get("MAKARE_TEST_OPERATOR_PASSWORD")
 S = {}  # shared state across ordered tests
 RUN = uuid.uuid4().hex[:4]
 
@@ -19,14 +25,18 @@ def login(u, p):
 
 @pytest.fixture(scope="module")
 def admin():
-    r = login("admin", "admin123")
+    if not ADMIN_PASSWORD:
+        pytest.fail("Set MAKARE_TEST_ADMIN_PASSWORD in the test environment")
+    r = login(ADMIN_USERNAME, ADMIN_PASSWORD)
     assert r.status_code == 200
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 @pytest.fixture(scope="module")
 def oper():
-    r = login("operator", "operator123")
+    if not OPERATOR_PASSWORD:
+        pytest.fail("Set MAKARE_TEST_OPERATOR_PASSWORD in the test environment")
+    r = login(OPERATOR_USERNAME, OPERATOR_PASSWORD)
     assert r.status_code == 200
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
@@ -70,7 +80,7 @@ def att_row(h, eid, d=None):
 
 # ---- Auth & RBAC ----
 def test_auth(admin, oper):
-    assert login("admin", "wrong").status_code == 401
+    assert login(ADMIN_USERNAME, "wrong").status_code == 401
     assert requests.get(f"{API}/employees").status_code in (401, 403)
     me = requests.get(f"{API}/auth/me", headers=oper)
     assert me.status_code == 200 and me.json()["role"] == "operator"
@@ -83,7 +93,9 @@ def test_operator_forbidden(oper):
     assert requests.get(f"{API}/attendance", headers=oper, params={"work_date": "2026-10-20"}).status_code == 403
     assert requests.get(f"{API}/attendance", headers=oper).status_code == 200
     emps = requests.get(f"{API}/employees", headers=oper).json()
-    assert emps and "regular_rate" not in emps[0] and "ktp" not in emps[0]
+    # Empty installations are valid; when rows exist, operator projection must still omit PII/pay rates.
+    assert isinstance(emps, list)
+    assert all("regular_rate" not in employee and "ktp" not in employee for employee in emps)
 
 
 # ---- Departments & employees ----
@@ -124,14 +136,18 @@ def test_empty_department_delete(admin):
 
 # ---- Clock in / out ----
 def test_clock_rules(admin, oper):
-    assert clock(oper, S["ani"], "in").status_code == 200
-    assert clock(oper, S["ani"], "in").status_code == 409
-    c = mk_emp(admin, f"TEST_Cici{RUN}")
-    S["cici"] = c["id"]
-    assert clock(admin, S["cici"], "out").status_code == 409
-    # after 17:00 -> no PIN needed
-    assert clock(oper, S["ani"], "out").status_code == 200
-    assert att_row(admin, S["ani"])["attendance"]["check_out"]
+    original_settings = get_settings(admin)
+    put_settings(admin, early_leave_requires_pin=False)
+    try:
+        assert clock(oper, S["ani"], "in").status_code == 200
+        assert clock(oper, S["ani"], "in").status_code == 409
+        c = mk_emp(admin, f"TEST_Cici{RUN}")
+        S["cici"] = c["id"]
+        assert clock(admin, S["cici"], "out").status_code == 409
+        assert clock(oper, S["ani"], "out").status_code == 200
+        assert att_row(admin, S["ani"])["attendance"]["check_out"]
+    finally:
+        put_settings(admin, early_leave_requires_pin=original_settings["early_leave_requires_pin"])
 
 
 def test_inactive_rejected(admin):
@@ -145,6 +161,7 @@ def test_inactive_rejected(admin):
 def test_early_leave_pin(admin):
     d = mk_emp(admin, f"TEST_Dedi{RUN}")
     S["dedi"] = d["id"]
+    original_settings = get_settings(admin)
     put_settings(admin, end_time="23:59")
     try:
         assert clock(admin, d["id"], "in").status_code == 200
@@ -174,9 +191,13 @@ def test_early_leave_pin(admin):
         r = clock(admin, d["id"], "out", pin=pin)
         assert r.status_code == 403, f"PIN reuse should be rejected, got {r.status_code}"
     finally:
-        put_settings(admin, end_time="17:00")
-    assert get_settings(admin)["end_time"] == "17:00"
-    assert clock(admin, d["id"], "out").status_code == 200
+        put_settings(admin, end_time=original_settings["end_time"])
+    assert get_settings(admin)["end_time"] == original_settings["end_time"]
+    put_settings(admin, early_leave_requires_pin=False)
+    try:
+        assert clock(admin, d["id"], "out").status_code == 200
+    finally:
+        put_settings(admin, early_leave_requires_pin=original_settings["early_leave_requires_pin"])
 
 
 # ---- Overtime ----
@@ -197,7 +218,7 @@ def test_manual_and_historical(admin, oper):
     assert requests.post(f"{API}/attendance/manual", headers=oper, json={"employee_id": S["cici"], "status": "sakit"}).status_code == 200
     assert requests.post(f"{API}/attendance/manual", headers=oper, json={"employee_id": S["cici"], "status": "izin"}).status_code == 409
     assert requests.post(f"{API}/attendance/manual", headers=oper, json={"employee_id": S["cici"], "status": "alfa", "work_date": "2026-10-20"}).status_code == 403
-    tomorrow = (date(2026, 10, 25) + timedelta(days=1)).isoformat()
+    tomorrow = (today_wib() + timedelta(days=1)).isoformat()
     assert requests.post(f"{API}/attendance/manual", headers=admin, json={"employee_id": S["cici"], "status": "alfa", "work_date": tomorrow, "reason": "x"}).status_code == 422
     b = {"employee_id": S["ani"], "status": "hadir", "work_date": "2026-10-20", "check_in": "08:10", "check_out": "17:00"}
     assert requests.post(f"{API}/attendance/manual", headers=admin, json=b).status_code == 422
@@ -221,16 +242,16 @@ def test_manual_and_historical(admin, oper):
 
 # ---- Users ----
 def test_users(admin):
-    r = requests.post(f"{API}/users", headers=admin, json={"username": f"test_op{RUN}", "full_name": "Test Op", "role": "operator", "password": "secret123"})
+    r = requests.post(f"{API}/users", headers=admin, json={"username": f"test_op{RUN}", "full_name": "Test Op", "role": "operator", "password": "secret12345!"})
     assert r.status_code == 200, r.text
     uid = r.json()["id"]
-    assert requests.post(f"{API}/users", headers=admin, json={"username": f"test_op{RUN}", "full_name": "Test Op", "role": "operator", "password": "secret123"}).status_code == 409
-    assert login(f"test_op{RUN}", "secret123").status_code == 200
-    assert requests.patch(f"{API}/users/{uid}", headers=admin, json={"password": "newpass123"}).status_code == 200
-    assert login(f"test_op{RUN}", "newpass123").status_code == 200
-    tok = login(f"test_op{RUN}", "newpass123").json()["token"]
+    assert requests.post(f"{API}/users", headers=admin, json={"username": f"test_op{RUN}", "full_name": "Test Op", "role": "operator", "password": "secret12345!"}).status_code == 409
+    assert login(f"test_op{RUN}", "secret12345!").status_code == 200
+    assert requests.patch(f"{API}/users/{uid}", headers=admin, json={"password": "newpass123!x"}).status_code == 200
+    assert login(f"test_op{RUN}", "newpass123!x").status_code == 200
+    tok = login(f"test_op{RUN}", "newpass123!x").json()["token"]
     assert requests.patch(f"{API}/users/{uid}", headers=admin, json={"active": False}).status_code == 200
-    assert login(f"test_op{RUN}", "newpass123").status_code == 401
+    assert login(f"test_op{RUN}", "newpass123!x").status_code == 401
     assert requests.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
     users = requests.get(f"{API}/users", headers=admin).json()
     admins = [u for u in users if u["role"] == "admin" and u["active"]]
@@ -252,6 +273,8 @@ def test_kasbon(admin):
 # ---- Kiosk ----
 def test_kiosk(admin):
     m = mk_emp(admin, f"TEST_Fani{RUN}", mode="manual")
+    pin = str(secrets.randbelow(899999) + 100000)
+    assert requests.post(f"{API}/settings/overtime-pin", headers=admin, json={"pin": pin}).status_code == 200
     tok = get_settings(admin)["kiosk_token"]
     k = f"{API}/kiosk/{tok}"
     assert requests.get(k).status_code == 200
@@ -266,7 +289,7 @@ def test_kiosk(admin):
     assert requests.post(f"{k}/clock", json={"employee_id": m["id"], "action": "in"}).status_code == 403
     assert requests.post(f"{k}/clock", json={"employee_id": S["ani"], "action": "in", "mode": "overtime"}).status_code == 403
     assert requests.post(f"{k}/overtime-unlock", json={"pin": "999999"}).status_code == 403
-    u = requests.post(f"{k}/overtime-unlock", json={"pin": "135790"})
+    u = requests.post(f"{k}/overtime-unlock", json={"pin": pin})
     assert u.status_code == 200
     ot = u.json()["ot_token"]
     r = requests.post(f"{k}/clock", json={"employee_id": S["ani"], "action": "in", "mode": "overtime", "ot_token": ot})
@@ -278,16 +301,30 @@ def test_kiosk(admin):
     assert requests.get(f"{API}/kiosk/{new}").status_code == 200
     # ot token bound to old kiosk token
     assert requests.post(f"{API}/kiosk/{new}/clock", json={"employee_id": S["ani"], "action": "in", "mode": "overtime", "ot_token": ot}).status_code == 403
+    # Leave a fresh random PIN configured; never leave a known test PIN active.
+    next_pin = str(secrets.randbelow(900000) + 100000)
+    assert requests.post(f"{API}/settings/overtime-pin", headers=admin, json={"pin": next_pin}).status_code == 200
+
+
+def test_attendance_report_and_pdf(admin):
+    params = {"start_date": (today_wib() - timedelta(days=7)).isoformat(),
+              "end_date": today_wib().isoformat()}
+    report = requests.get(f"{API}/reports/attendance", headers=admin, params=params)
+    assert report.status_code == 200, report.text
+    assert "summary" in report.json() and "rows" in report.json()
+    pdf = requests.get(f"{API}/reports/attendance.pdf", headers=admin, params=params)
+    assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF", pdf.text[:200]
 
 
 # ---- Payroll / Tutup Buku ----
-END = "2026-10-24"
+END = (today_wib() - timedelta(days=7)).isoformat()
 
 
 def test_preview(admin):
     nxt = requests.get(f"{API}/payroll/next-period", headers=admin).json()
     S["start"] = nxt["start_date"]
-    assert requests.post(f"{API}/payroll/preview", headers=admin, json={"end_date": "2026-10-26"}).status_code == 422
+    assert requests.post(f"{API}/payroll/preview", headers=admin,
+                         json={"end_date": (today_wib() + timedelta(days=1)).isoformat()}).status_code == 422
     r = requests.post(f"{API}/payroll/preview", headers=admin, json={"end_date": END})
     assert r.status_code == 200, r.text
     lines = {ln["employee_id"]: ln for ln in r.json()["lines"]}
@@ -311,6 +348,9 @@ def test_finalize_idempotent_and_lock(admin):
     assert r1.json()["duplicate"] is False
     r2 = requests.post(f"{API}/payroll/finalize", headers=admin, json=body)
     assert r2.status_code == 200 and r2.json()["duplicate"] is True and r2.json()["period_id"] == r1.json()["period_id"]
+    changed = {**body, "adjustments": {str(S["ani"]): {"kasbon_deduction": 50000, "other_deduction": 1}}}
+    r3 = requests.post(f"{API}/payroll/finalize", headers=admin, json=changed)
+    assert r3.status_code == 409, r3.text
     pid = r1.json()["period_id"]
     S["pid"] = pid
     periods = requests.get(f"{API}/payroll/periods", headers=admin).json()

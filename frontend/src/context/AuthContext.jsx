@@ -22,9 +22,16 @@ export function AuthProvider({ children }) {
     return r.data.user;
   };
 
-  const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    setUser(null);
+  const logout = async ({ revoke = true } = {}) => {
+    let revoked = !revoke;
+    try {
+      if (revoke) { await api.post("/auth/logout"); revoked = true; }
+    } catch { /* Local sign-out must still work if the network is unavailable. */ }
+    finally {
+      localStorage.removeItem(TOKEN_KEY);
+      setUser(null);
+    }
+    return revoked;
   };
 
   return <AuthCtx.Provider value={{ user, ready, login, logout, isAdmin: user?.role === "admin" }}>{children}</AuthCtx.Provider>;

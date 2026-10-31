@@ -1,0 +1,10 @@
+.vercel
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local secrets must not enter a serverless deployment upload.
+.env
+.env.*
+!.env.example

@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, History } from "lucide-react";
+import { Plus, History, FileDown } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, Loading, EmptyState, Field, selectCls } from "@/components/app/common";
-import { api, errMsg } from "@/lib/api";
+import { api, downloadPdf, errMsg } from "@/lib/api";
 import { rupiah, dateID } from "@/lib/format";
 
 function GrantDialog({ open, onClose, onSaved }) {
   const [emps, setEmps] = useState([]);
   const [f, setF] = useState({ employee_id: "", amount: "", note: "" });
   const [busy, setBusy] = useState(false);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesError, setEmployeesError] = useState("");
   useEffect(() => {
     if (open) {
+      let ignore = false;
       setF({ employee_id: "", amount: "", note: "" });
-      api.get("/employees", { params: { status: "active" } }).then((r) => setEmps(r.data));
+      setEmployeesLoading(true); setEmployeesError(""); setEmps([]);
+      api.get("/employees", { params: { status: "active" } }).then((r) => { if (!ignore) setEmps(r.data); })
+        .catch((e) => { if (!ignore) setEmployeesError(errMsg(e)); })
+        .finally(() => { if (!ignore) setEmployeesLoading(false); });
+      return () => { ignore = true; };
     }
   }, [open]);
   const save = async (e) => {
@@ -34,15 +41,16 @@ function GrantDialog({ open, onClose, onSaved }) {
         <DialogHeader><DialogTitle>Catat Pemberian Kasbon</DialogTitle></DialogHeader>
         <form onSubmit={save} className="space-y-4">
           <Field label="Karyawan" required>
-            <select className={selectCls} value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} required data-testid="kasbon-employee-select">
-              <option value="" disabled>Pilih karyawan</option>
+            <select className={selectCls} value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} required disabled={employeesLoading || !!employeesError || emps.length === 0} data-testid="kasbon-employee-select">
+              <option value="">{employeesLoading ? "Memuat karyawan…" : employeesError ? "Gagal memuat karyawan" : emps.length === 0 ? "Tidak ada karyawan aktif" : "Pilih karyawan"}</option>
               {emps.map((x) => <option key={x.id} value={x.id}>{x.code} — {x.full_name}</option>)}
             </select>
           </Field>
+          {employeesError && <div className="text-sm text-red-700" role="alert">{employeesError} <Button type="button" variant="link" onClick={async () => { setEmployeesLoading(true); setEmployeesError(""); try { setEmps((await api.get("/employees", { params: { status: "active" } })).data); } catch (e) { setEmployeesError(errMsg(e)); } finally { setEmployeesLoading(false); } }}>Coba lagi</Button></div>}
           <Field label="Nominal (Rp)" required><Input type="number" min="1" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} required data-testid="kasbon-amount-input" /></Field>
           <Field label="Keterangan"><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} data-testid="kasbon-note-input" /></Field>
           <p className="text-xs text-muted-foreground">Saldo tidak dapat diedit langsung. Potongan dicatat otomatis saat tutup buku.</p>
-          <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Batal</Button><Button disabled={busy} className="mk-gradient text-white" data-testid="kasbon-save-button">Simpan</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Batal</Button><Button disabled={busy || employeesLoading || !!employeesError || emps.length === 0} className="mk-gradient text-white" data-testid="kasbon-save-button">{busy ? "Menyimpan…" : "Simpan"}</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
@@ -51,12 +59,21 @@ function GrantDialog({ open, onClose, onSaved }) {
 
 function LedgerDialog({ emp, onClose }) {
   const [rows, setRows] = useState(null);
-  useEffect(() => { if (emp) api.get(`/kasbon/${emp.employee_id}`).then((r) => setRows(r.data)); else setRows(null); }, [emp]);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!emp) { setRows(null); setError(""); return; }
+    let ignore = false;
+    setRows(null); setError("");
+    api.get(`/kasbon/${emp.employee_id}`).then((r) => { if (!ignore) setRows(r.data); })
+      .catch((e) => { if (!ignore) setError(errMsg(e)); });
+    return () => { ignore = true; };
+  }, [emp, attempt]);
   return (
     <Dialog open={!!emp} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl" data-testid="kasbon-ledger-dialog">
         <DialogHeader><DialogTitle>Riwayat Kasbon · {emp?.full_name}</DialogTitle></DialogHeader>
-        {!rows ? <Loading /> : (
+        {error ? <EmptyState title="Riwayat kasbon gagal dimuat" hint={error} action={<Button onClick={() => setAttempt((n) => n + 1)}>Coba lagi</Button>} /> : !rows ? <Loading /> : rows.length === 0 ? <EmptyState title="Belum ada transaksi kasbon" /> : (
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase text-muted-foreground"><tr><th className="py-2">Tanggal</th><th>Jenis</th><th>Keterangan</th><th className="text-right">Nominal</th></tr></thead>
             <tbody>{rows.map((r) => (
@@ -76,16 +93,23 @@ function LedgerDialog({ emp, onClose }) {
 
 export default function Kasbon() {
   const [list, setList] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [grant, setGrant] = useState(false);
   const [ledger, setLedger] = useState(null);
-  const load = useCallback(() => { api.get("/kasbon").then((r) => setList(r.data)).catch((e) => toast.error(errMsg(e))); }, []);
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try { setList((await api.get("/kasbon")).data); }
+    catch (e) { setList(null); setError(errMsg(e)); }
+    finally { setLoading(false); }
+  }, []);
   useEffect(() => { load(); }, [load]);
   return (
     <div>
       <PageHeader eyebrow="Keuangan" title="Kasbon" subtitle="Saldo dihitung dari transaksi yang dapat ditelusuri. Sisa saldo dibawa ke periode berikutnya."
-        actions={<Button className="mk-gradient text-white" onClick={() => setGrant(true)} data-testid="add-kasbon-button"><Plus className="h-4 w-4 mr-1" />Catat Kasbon</Button>} />
+        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => downloadPdf("/kasbon/report.pdf", "rekap-kasbon.pdf").catch((e) => toast.error(errMsg(e)))} data-testid="kasbon-report-pdf"><FileDown className="h-4 w-4 mr-1" />Rekap PDF</Button><Button className="mk-gradient text-white" onClick={() => setGrant(true)} data-testid="add-kasbon-button"><Plus className="h-4 w-4 mr-1" />Catat Kasbon</Button></div>} />
       <div className="mk-card">
-        {!list ? <Loading /> : list.length === 0 ? <EmptyState title="Belum ada kasbon" /> : (
+        {loading ? <Loading /> : error ? <EmptyState title="Rekap kasbon gagal dimuat" hint={error} action={<Button onClick={load}>Coba lagi</Button>} /> : list.length === 0 ? <EmptyState title="Belum ada kasbon" /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="kasbon-table">
               <thead className="bg-[#F4F7FB] text-left text-xs uppercase tracking-wider text-muted-foreground">

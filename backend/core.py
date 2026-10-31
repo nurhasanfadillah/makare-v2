@@ -5,15 +5,17 @@ from collections import defaultdict, deque
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import asyncpg
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(os.environ.get("MAKARE_ENV_FILE", Path(__file__).parent / ".env"))
 
 WIB = ZoneInfo("Asia/Jakarta")
 _pool = None
+_migration_pool = None
 
 
 def now_wib() -> datetime:
@@ -29,17 +31,40 @@ async def _init_conn(conn):
     await conn.execute("SET TIME ZONE 'Asia/Jakarta'")
 
 
+async def _create_pool(database_url: str, max_size: int):
+    # asyncpg receives the connection string without provider-specific query
+    # options; TLS policy is passed explicitly and disabled only for local/test.
+    url = urlsplit(database_url)._replace(query="").geturl()
+    from config import database_ssl_mode
+    ssl_mode = database_ssl_mode(os.environ.get("DATABASE_SSL_MODE"), os.environ.get("APP_ENV"))
+    return await asyncpg.create_pool(url, ssl=ssl_mode, min_size=1, max_size=max_size, init=_init_conn)
+
+
 async def get_pool():
     global _pool
     if _pool is None:
-        url = os.environ["DATABASE_URL"].split("?")[0]
-        _pool = await asyncpg.create_pool(url, ssl="require", min_size=1, max_size=8, init=_init_conn)
+        _pool = await _create_pool(os.environ["DATABASE_URL"], max_size=8)
     return _pool
 
 
+async def get_migration_pool():
+    global _migration_pool
+    if _migration_pool is None:
+        from config import migration_database_url
+        runtime_url = os.environ["DATABASE_URL"]
+        url = migration_database_url(runtime_url, os.environ.get("DATABASE_MIGRATION_URL"))
+        _migration_pool = await _create_pool(url, max_size=1)
+    return _migration_pool
+
+
 async def close_pool():
+    global _migration_pool, _pool
+    if _migration_pool is not None:
+        await _migration_pool.close()
+        _migration_pool = None
     if _pool is not None:
         await _pool.close()
+        _pool = None
 
 
 def err(status: int, message: str):
@@ -80,9 +105,13 @@ async def ensure_open_date(conn, d: date):
 _hits = defaultdict(deque)
 
 
-def rate_limit(request: Request, bucket: str, limit: int, window: int):
+def client_ip(request: Request) -> str:
     # Last hop is appended by the trusted ingress; earlier values are client-controlled.
-    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[-1].strip()
+    return (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[-1].strip()
+
+
+def rate_limit(request: Request, bucket: str, limit: int, window: int):
+    ip = client_ip(request)
     key = f"{bucket}:{ip}"
     q = _hits[key]
     t = time.monotonic()

@@ -87,6 +87,7 @@ android-sdk/
 .env
 *.env
 !.env.example
+.env.local
 .ruff_cache/
 __pycache__/
 .pytest_cache/

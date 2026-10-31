@@ -29,19 +29,23 @@ async def employee_state(conn, employee_id: int) -> dict:
 
 
 async def clock(conn, employee_id: int, mode: str, action: str, actor: str, source: str, early_pin: str | None = None):
-    emp = await conn.fetchrow("SELECT id, code, full_name, active, payroll_mode FROM employees WHERE id=$1", employee_id)
-    if not emp:
-        err(404, "Karyawan tidak ditemukan")
-    if not emp["active"]:
-        err(409, "Karyawan nonaktif tidak dapat melakukan absensi")
-    if source == "kiosk" and emp["payroll_mode"] != "hourly":
-        err(403, "Karyawan ini tidak menggunakan absensi kiosk")
     cfg = await get_settings(conn)
     now = now_wib()
     today = now.date()
     await ensure_open_date(conn, today)
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock(1001, $1)", employee_id)
+        # Re-read and lock the employee after the shared clock-path lock. This
+        # serializes attendance with admin activation changes and prevents a
+        # request that observed stale active=True from creating attendance.
+        emp = await conn.fetchrow(
+            "SELECT id, code, full_name, active, payroll_mode FROM employees WHERE id=$1 FOR UPDATE", employee_id)
+        if not emp:
+            err(404, "Karyawan tidak ditemukan")
+        if not emp["active"]:
+            err(409, "Karyawan nonaktif tidak dapat melakukan absensi")
+        if source == "kiosk" and emp["payroll_mode"] != "hourly":
+            err(403, "Karyawan ini tidak menggunakan absensi kiosk")
         if mode == "overtime":
             if not cfg.get("overtime_enabled"):
                 err(403, "Fitur lembur sedang nonaktif")
@@ -139,6 +143,16 @@ async def build_payroll(conn, start: date, end: date, overrides: dict | None = N
         atts[a["employee_id"]].append(a)
     for o in await conn.fetch("SELECT * FROM overtime_sessions WHERE work_date BETWEEN $1 AND $2 ORDER BY check_in", start, end):
         ots[o["employee_id"]].append(o)
+    employees_by_id = {e["id"]: e for e in emps}
+    for key, override in overrides.items():
+        if override.get("components") is not None:
+            try:
+                employee_id = int(key)
+            except (TypeError, ValueError):
+                err(422, "ID karyawan pada komponen payroll tidak valid")
+            employee = employees_by_id.get(employee_id)
+            if not employee:
+                err(422, f"Karyawan #{employee_id} tidak masuk dalam periode payroll")
     balances = {r["employee_id"]: r["bal"] for r in await conn.fetch(
         "SELECT employee_id, sum(CASE WHEN kind='deduction' THEN -amount ELSE amount END) AS bal FROM cash_advances GROUP BY employee_id")}
     keys = ["raw_minutes", "break_minutes", "late_adjustment_minutes", "eligible_minutes", "rounded_minutes", "paid_minutes"]
@@ -163,19 +177,21 @@ async def build_payroll(conn, start: date, end: date, overrides: dict | None = N
             sessions.append(s)
         ot_sessions, ot_min = [], 0
         for o in ots[eid]:
-            c = compute_overtime(o["check_in"], o["check_out"], cfg)
+            regular_end = schedule_bounds(o["work_date"], cfg)[1]
+            c = compute_overtime(o["check_in"], o["check_out"], cfg, regular_end)
             ot_min += c["paid_minutes"]
             ot_sessions.append({"date": o["work_date"].isoformat(), "check_in": o["check_in"].isoformat(),
                                 "check_out": o["check_out"].isoformat() if o["check_out"] else None, **c})
         ov = overrides.get(str(eid), {})
+        effective_components = ov.get("components") if ov.get("components") is not None else comps[eid]
         try:
             pay = compute_pay(e["payroll_mode"], e["regular_rate"], e["overtime_rate"], sums["paid_minutes"], ot_min,
-                              comps[eid], int(ov.get("other_deduction") or 0), int(balances.get(eid, 0) or 0), ov.get("kasbon_deduction"))
+                              effective_components, int(ov.get("other_deduction") or 0), int(balances.get(eid, 0) or 0), ov.get("kasbon_deduction"))
         except ValueError as ex:
             err(422, f"{e['code']} {e['full_name']}: {ex}")
         line = {"employee_id": eid, "code": e["code"], "full_name": e["full_name"], "department": e["department"],
                 "payroll_mode": e["payroll_mode"], "regular_rate": e["regular_rate"], "overtime_rate": e["overtime_rate"],
-                "components": comps[eid], "counts": counts, "durations": sums, "overtime_minutes": ot_min,
+                "components": effective_components, "counts": counts, "durations": sums, "overtime_minutes": ot_min,
                 "sessions": sessions, "overtime_sessions": ot_sessions, **pay}
         for k in ["gross", "net_before_kasbon", "kasbon_deduction", "net_final", "other_deduction"]:
             totals[k] += pay[k]
@@ -184,11 +200,14 @@ async def build_payroll(conn, start: date, end: date, overrides: dict | None = N
     return {"start_date": start.isoformat(), "end_date": end.isoformat(), "lines": out, "totals": dict(totals)}
 
 
-async def finalize_closing(conn, end: date, idem_key: str, overrides: dict, actor: str) -> dict:
+async def finalize_closing(conn, end: date, idem_key: str, overrides: dict, actor: str, payload_hash: str) -> dict:
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock(2002)")
-        existing = await conn.fetchrow("SELECT id FROM payroll_periods WHERE idempotency_key=$1", idem_key)
+        existing = await conn.fetchrow("SELECT id, finalize_payload_hash FROM payroll_periods WHERE idempotency_key=$1", idem_key)
         if existing:
+            stored_hash = existing["finalize_payload_hash"]
+            if stored_hash is not None and stored_hash != payload_hash:
+                err(409, "Kunci finalisasi sudah dipakai dengan payload payroll yang berbeda")
             return {"period_id": existing["id"], "duplicate": True}
         nxt = await next_period(conn)
         start = date.fromisoformat(nxt["start_date"])
@@ -196,10 +215,12 @@ async def finalize_closing(conn, end: date, idem_key: str, overrides: dict, acto
             err(422, "Tanggal akhir tidak valid")
         data = await build_payroll(conn, start, end, overrides)
         cfg = await get_settings(conn)
-        cfg_snap = {k: v for k, v in cfg.items() if k not in ("kiosk_token", "overtime_pin_hash")}
+        cfg_snap = {k: v for k, v in cfg.items() if k not in (
+            "kiosk_token", "overtime_pin_hash", "ot_pin_attempts_by_source", "ot_pin_failures", "ot_pin_locked_until"
+        )}
         pid = await conn.fetchval(
-            "INSERT INTO payroll_periods(start_date, end_date, idempotency_key, totals, settings_snapshot, closed_by) "
-            "VALUES($1,$2,$3,$4,$5,$6) RETURNING id", start, end, idem_key, data["totals"], cfg_snap, actor)
+            "INSERT INTO payroll_periods(start_date, end_date, idempotency_key, finalize_payload_hash, totals, settings_snapshot, closed_by) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id", start, end, idem_key, payload_hash, data["totals"], cfg_snap, actor)
         await conn.executemany(
             "INSERT INTO payroll_snapshots(period_id, employee_id, data, gross, net_before_kasbon, kasbon_deduction, net_final) "
             "VALUES($1,$2,$3,$4,$5,$6,$7)",

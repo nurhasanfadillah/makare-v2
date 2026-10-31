@@ -41,11 +41,11 @@ export default function Login() {
           <h1 className="text-4xl xl:text-5xl font-extrabold tracking-tight leading-[1.1]">Absensi, jam kerja, dan penggajian yang dapat diaudit.</h1>
           <p className="mt-5 text-white/80 leading-relaxed">Setiap transaksi memakai waktu server WIB, setiap tutup buku tersimpan sebagai snapshot final yang tidak dapat diubah diam-diam.</p>
         </div>
-        <div className="flex items-center gap-2 text-sm text-white/75"><ShieldCheck className="h-4 w-4" /> Akses dibatasi berdasarkan peran</div>
+        <div className="flex items-center gap-2 text-sm text-white/75"><ShieldCheck aria-hidden="true" className="h-4 w-4" /> Akses dibatasi berdasarkan peran</div>
         <div className="absolute -right-24 -bottom-24 h-80 w-80 rounded-full border border-white/15" aria-hidden />
         <div className="absolute -right-10 -bottom-10 h-52 w-52 rounded-full border border-white/20" aria-hidden />
       </div>
-      <div className="flex items-center justify-center p-6 sm:p-12">
+      <main className="flex items-center justify-center p-6 sm:p-12">
         <form onSubmit={submit} className="w-full max-w-sm mk-fade" data-testid="login-form">
           <div className="lg:hidden mb-8 flex items-center gap-2">
             <div className="h-9 w-9 rounded-xl mk-gradient text-white flex items-center justify-center font-extrabold">M</div>
@@ -56,22 +56,24 @@ export default function Login() {
           <p className="text-sm text-muted-foreground mt-2 mb-8">Gunakan akun Administrator atau Operator Input Anda.</p>
           <div className="space-y-4">
             <div className="relative">
-              <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input data-testid="login-username-input" className="h-12 pl-10 bg-white" placeholder="Username" autoComplete="username"
+              <label htmlFor="login-username" className="sr-only">Username</label>
+              <User aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="login-username" data-testid="login-username-input" className="h-12 pl-10 bg-white" placeholder="Username" autoComplete="username"
                 value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
             </div>
             <div className="relative">
-              <LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input data-testid="login-password-input" type="password" className="h-12 pl-10 bg-white" placeholder="Kata sandi" autoComplete="current-password"
+              <label htmlFor="login-password" className="sr-only">Kata sandi</label>
+              <LockKeyhole aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="login-password" data-testid="login-password-input" type="password" className="h-12 pl-10 bg-white" placeholder="Kata sandi" autoComplete="current-password"
                 value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
             </div>
             {error && <div role="alert" data-testid="login-error" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
             <Button data-testid="login-submit-button" disabled={busy} className="h-12 w-full mk-gradient text-white font-semibold hover:opacity-95 transition-opacity">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Masuk"}
+              {busy ? <><Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /><span className="sr-only">Memproses masuk</span></> : "Masuk"}
             </Button>
           </div>
         </form>
-      </div>
+      </main>
     </div>
   );
 }

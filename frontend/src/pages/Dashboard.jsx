@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Users, CalendarCheck, AlarmClock, Timer, ArrowRight, Wallet, BookLock } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { StatCard, Loading, EmptyState } from "@/components/app/common";
 import { dateID, dateTimeID, rupiah } from "@/lib/format";
+import { Button } from "@/components/ui/button";
 
 const ACTIONS = {
   regular_in: "Masuk reguler", regular_out: "Keluar reguler", overtime_in: "Masuk lembur", overtime_out: "Keluar lembur",
@@ -17,12 +18,18 @@ export default function Dashboard() {
   const { user, isAdmin } = useAuth();
   const [d, setD] = useState(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    api.get("/dashboard").then((r) => setD(r.data)).catch((e) => setError(errMsg(e)));
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try { setD((await api.get("/dashboard")).data); }
+    catch (e) { setD(null); setError(errMsg(e)); }
+    finally { setLoading(false); }
   }, []);
+  useEffect(() => { load(); }, [load]);
 
-  if (error) return <EmptyState title="Gagal memuat dashboard" hint={error} />;
+  if (loading) return <Loading />;
+  if (error) return <EmptyState title="Gagal memuat dashboard" hint={error} action={<Button onClick={load}>Coba lagi</Button>} />;
   if (!d) return <Loading />;
   const t = d.today;
   return (

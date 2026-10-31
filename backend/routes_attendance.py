@@ -5,9 +5,10 @@ from typing import Literal, Optional
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from core import get_pool, err, audit, rows, row, today_wib, now_wib, get_settings, ensure_open_date, rate_limit, WIB, invalidate_settings
+from core import get_pool, err, audit, rows, row, today_wib, now_wib, get_settings, ensure_open_date, rate_limit, client_ip, WIB, invalidate_settings
+from kiosk_security import kiosk_pin_scope, pin_scope_locked, record_pin_attempt
 from rules import compute_regular, compute_overtime, schedule_bounds
 from security import current_user, require_admin, make_token, decode_token, verify_secret
 from services import clock, create_early_pin, employee_state
@@ -47,7 +48,9 @@ async def list_attendance(work_date: Optional[date] = None, user: dict = Depends
         rec = row(a) if a else None
         if a and a["status"] == "hadir" and a["check_in"]:
             rec["calc"] = compute_regular(a["check_in"], a["check_out"], a["work_date"], cfg)
-        ot_list = [{**row(o), "calc": compute_overtime(o["check_in"], o["check_out"], cfg)} for o in ots.get(e["id"], [])]
+        ot_list = [{**row(o), "calc": compute_overtime(
+            o["check_in"], o["check_out"], cfg, schedule_bounds(o["work_date"], cfg)[1]
+        )} for o in ots.get(e["id"], [])]
         out.append({**row(e), "attendance": rec, "overtime": ot_list,
                     "overtime_open": any(o["check_out"] is None for o in ots.get(e["id"], []))})
     return {"date": d.isoformat(), "today": t.isoformat(), "locked": bool(closed_end and d <= closed_end),
@@ -59,6 +62,16 @@ class ClockIn(BaseModel):
     mode: Literal["regular", "overtime"] = "regular"
     action: Literal["in", "out"]
     early_pin: Optional[str] = Field(default=None, pattern=r"^\d{6}$")
+
+
+def _validate_clock_time(value):
+    if value is not None:
+        try:
+            h, m = map(int, value.split(":"))
+            time(h, m)
+        except (ValueError, AttributeError):
+            raise ValueError("Jam harus berupa waktu valid dengan format HH:MM")
+    return value
 
 
 def _check_result(res):
@@ -86,12 +99,21 @@ class ManualIn(BaseModel):
     check_out_next_day: bool = False
     reason: Optional[str] = Field(default=None, max_length=300)
 
+    @field_validator("check_in", "check_out")
+    @classmethod
+    def valid_clock_time(cls, value):
+        return _validate_clock_time(value)
+
 
 def _ts(d: date, hm: Optional[str], next_day=False):
     if not hm:
         return None
     h, m = map(int, hm.split(":"))
     return datetime.combine(d + timedelta(days=1 if next_day else 0), time(h, m), tzinfo=WIB)
+
+
+def _is_early_leave(work_date: date, check_out: Optional[datetime], cfg: dict) -> bool:
+    return bool(check_out and check_out < schedule_bounds(work_date, cfg)[1])
 
 
 @router.post("/attendance/manual")
@@ -109,11 +131,6 @@ async def manual_entry(body: ManualIn, user: dict = Depends(current_user)):
     pool = await get_pool()
     async with pool.acquire() as c:
         await ensure_open_date(c, d)
-        emp = await c.fetchrow("SELECT active FROM employees WHERE id=$1", body.employee_id)
-        if not emp:
-            err(404, "Karyawan tidak ditemukan")
-        if not emp["active"]:
-            err(409, "Karyawan nonaktif tidak dapat melakukan absensi")
         cin, cout = None, None
         if body.status == "hadir":
             cin = _ts(d, body.check_in) if body.check_in else (now_wib() if d == t else None)
@@ -126,14 +143,30 @@ async def manual_entry(body: ManualIn, user: dict = Depends(current_user)):
                 err(422, "Waktu tidak boleh melebihi waktu server saat ini")
         try:
             async with c.transaction():
+                # Serialize every attendance entry path with kiosk/clock so manual input
+                # cannot create a regular session beside an open overtime session.
+                await c.execute("SELECT pg_advisory_xact_lock(1001, $1)", body.employee_id)
+                emp = await c.fetchrow("SELECT active FROM employees WHERE id=$1 FOR UPDATE", body.employee_id)
+                if not emp:
+                    err(404, "Karyawan tidak ditemukan")
+                if not emp["active"]:
+                    err(409, "Karyawan nonaktif tidak dapat melakukan absensi")
+                if cin and not cout and await c.fetchval(
+                    "SELECT 1 FROM overtime_sessions WHERE employee_id=$1 AND check_out IS NULL",
+                    body.employee_id,
+                ):
+                    err(409, "Tutup sesi lembur terlebih dahulu sebelum membuka sesi reguler")
+                early_leave = _is_early_leave(d, cout, await get_settings(c)) if body.status == "hadir" else False
                 r = await c.fetchrow(
-                    "INSERT INTO attendance(employee_id, work_date, status, check_in, check_out, source, note, created_by) "
-                    "VALUES($1,$2,$3,$4,$5,'manual',$6,$7) ON CONFLICT (employee_id, work_date) DO NOTHING RETURNING id",
-                    body.employee_id, d, body.status, cin, cout, body.note, user["username"])
+                    "INSERT INTO attendance(employee_id, work_date, status, check_in, check_out, early_leave, source, note, created_by) "
+                    "VALUES($1,$2,$3,$4,$5,$6,'manual',$7,$8) ON CONFLICT (employee_id, work_date) DO NOTHING RETURNING id",
+                    body.employee_id, d, body.status, cin, cout, early_leave, body.note, user["username"])
                 if not r:
                     err(409, "Absensi karyawan pada tanggal ini sudah tercatat")
+                fmt = lambda v: v.astimezone(WIB).strftime("%Y-%m-%d %H:%M") if v else None  # noqa: E731
                 await audit(c, user["username"], "attendance_manual", "attendance", r["id"],
-                            after={"status": body.status, "date": d.isoformat(), "reason": body.reason})
+                            after={"status": body.status, "date": d.isoformat(), "check_in": fmt(cin),
+                                   "check_out": fmt(cout), "early_leave": early_leave, "reason": body.reason})
         except asyncpg.UniqueViolationError:
             err(409, "Masih ada sesi Masuk yang belum ditutup")
     return {"id": r["id"]}
@@ -147,6 +180,19 @@ class CorrectionIn(BaseModel):
     note: Optional[str] = Field(default=None, max_length=300)
     reason: str = Field(min_length=3, max_length=300)
 
+    @field_validator("check_in", "check_out")
+    @classmethod
+    def valid_clock_time(cls, value):
+        return _validate_clock_time(value)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_text(cls, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("Alasan minimal 3 karakter")
+        return value
+
 
 @router.put("/attendance/{aid}")
 async def correct_attendance(aid: int, body: CorrectionIn, admin: dict = Depends(require_admin)):
@@ -154,6 +200,10 @@ async def correct_attendance(aid: int, body: CorrectionIn, admin: dict = Depends
     async with pool.acquire() as c:
         try:
             async with c.transaction():
+                employee_id = await c.fetchval("SELECT employee_id FROM attendance WHERE id=$1", aid)
+                if employee_id is None:
+                    err(404, "Data absensi tidak ditemukan")
+                await c.execute("SELECT pg_advisory_xact_lock(1001, $1)", employee_id)
                 a = await c.fetchrow("SELECT * FROM attendance WHERE id=$1 FOR UPDATE", aid)
                 if not a:
                     err(404, "Data absensi tidak ditemukan")
@@ -166,7 +216,12 @@ async def correct_attendance(aid: int, body: CorrectionIn, admin: dict = Depends
                     err(422, "Jam Keluar tidak boleh sebelum jam Masuk")
                 if (cin and cin > now_wib()) or (cout and cout > now_wib()):
                     err(422, "Waktu tidak boleh melebihi waktu server saat ini")
-                early = bool(cout and cout < schedule_bounds(a["work_date"], await get_settings(c))[1])
+                if cin and not cout and await c.fetchval(
+                    "SELECT 1 FROM overtime_sessions WHERE employee_id=$1 AND check_out IS NULL",
+                    a["employee_id"],
+                ):
+                    err(409, "Tutup sesi lembur terlebih dahulu sebelum membuka sesi reguler")
+                early = _is_early_leave(a["work_date"], cout, await get_settings(c)) if body.status == "hadir" else False
                 await c.execute("UPDATE attendance SET status=$2, check_in=$3, check_out=$4, note=$5, early_leave=$6 WHERE id=$1",
                                 aid, body.status, cin, cout, body.note, early)
                 fmt = lambda v: v.astimezone(WIB).strftime("%Y-%m-%d %H:%M") if v else None  # noqa: E731
@@ -193,7 +248,8 @@ def _kt_hash(token: str) -> str:
 
 async def _kiosk_cfg(c, token: str, request: Request) -> dict:
     rate_limit(request, "kiosk", 240, 60)
-    cfg = await get_settings(c)
+    # Kiosk authorization must observe rotations/disablement immediately on every instance.
+    cfg = await c.fetchval("SELECT value FROM settings WHERE key='app'") or {}
     if not cfg.get("kiosk_enabled") or not secrets.compare_digest(token, cfg.get("kiosk_token", "")):
         err(404, "Tautan kiosk tidak aktif")
     return cfg
@@ -235,6 +291,7 @@ async def kiosk_state(token: str, eid: int, request: Request):
 @router.post("/kiosk/{token}/overtime-unlock")
 async def kiosk_ot_unlock(token: str, body: dict, request: Request):
     rate_limit(request, "kiosk_pin", 5, 300)
+    scope = kiosk_pin_scope(token, client_ip(request))
     pool = await get_pool()
     async with pool.acquire() as c:
         cfg = await _kiosk_cfg(c, token, request)
@@ -243,13 +300,15 @@ async def kiosk_ot_unlock(token: str, body: dict, request: Request):
         pin = str(body.get("pin", ""))[:6]
         async with c.transaction():
             live = await c.fetchval("SELECT value FROM settings WHERE key='app' FOR UPDATE")
-            locked_until = live.get("ot_pin_locked_until")
-            if locked_until and datetime.fromisoformat(locked_until) > now_wib():
+            attempts = live.get("ot_pin_attempts_by_source", {})
+            if pin_scope_locked(attempts, scope, now_wib().timestamp()):
                 err(429, "Terlalu banyak PIN salah. Mode lembur dikunci sementara.")
             ok = bool(live.get("overtime_pin_hash")) and verify_secret(pin, live["overtime_pin_hash"])
-            fails = 0 if ok else int(live.get("ot_pin_failures", 0)) + 1
-            live["ot_pin_failures"] = 0 if fails >= 5 else fails
-            live["ot_pin_locked_until"] = (now_wib() + timedelta(minutes=15)).isoformat() if fails >= 5 else None
+            attempts = record_pin_attempt(attempts, scope, now_wib().timestamp(), ok)
+            live["ot_pin_attempts_by_source"] = attempts
+            # Drop the old application-wide lockout state during the first write after upgrade.
+            live.pop("ot_pin_failures", None)
+            live.pop("ot_pin_locked_until", None)
             await c.execute("UPDATE settings SET value=$1 WHERE key='app'", live)
             invalidate_settings()
             await audit(c, "kiosk", "overtime_unlocked" if ok else "overtime_unlock_failed", "kiosk", result="success" if ok else "failed")

@@ -3,21 +3,29 @@ import { useParams, Link } from "react-router-dom";
 import { FileDown, ChevronDown, ChevronRight, Lock, ArrowLeft, PencilLine } from "lucide-react";
 import { AdjustmentDialog, KIND_LABEL } from "@/components/app/AdjustmentDialog";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { PageHeader, Loading } from "@/components/app/common";
+import { PageHeader, Loading, EmptyState } from "@/components/app/common";
 import { PayrollBreakdown } from "@/components/app/PayrollBreakdown";
 import { api, errMsg, downloadPdf } from "@/lib/api";
 import { rupiah, dur, dateID, dateTimeID } from "@/lib/format";
+import { Button } from "@/components/ui/button";
 
 export default function PeriodDetail() {
   const { id } = useParams();
   const [p, setP] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState({});
   const [adjLine, setAdjLine] = useState(null);
-  const load = useCallback(() => { api.get(`/payroll/periods/${id}`).then((r) => setP(r.data)).catch((e) => toast.error(errMsg(e))); }, [id]);
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try { setP((await api.get(`/payroll/periods/${id}`)).data); }
+    catch (e) { setP(null); setError(errMsg(e)); }
+    finally { setLoading(false); }
+  }, [id]);
   useEffect(() => { load(); }, [load]);
   const pdf = (path, name) => downloadPdf(path, name).catch((e) => toast.error(errMsg(e)));
-  if (!p) return <Loading />;
+  if (loading) return <Loading />;
+  if (!p) return <div><PageHeader eyebrow="Penggajian" title="Detail Tutup Buku" /><EmptyState title="Periode gagal dimuat" hint={error} action={<Button onClick={load}>Coba lagi</Button>} /></div>;
   return (
     <div>
       <Link to="/riwayat" className="inline-flex items-center gap-1 text-sm text-muted-foreground mb-3"><ArrowLeft className="h-4 w-4" />Riwayat</Link>
@@ -33,7 +41,7 @@ export default function PeriodDetail() {
           <tbody>{p.lines.map((l) => (
             <Fragment key={l.employee_id}>
               <tr className="border-t" data-testid={`period-line-${l.code}`}>
-                <td className="px-3 py-2"><button onClick={() => setOpen({ ...open, [l.employee_id]: !open[l.employee_id] })} aria-label="Rincian">{open[l.employee_id] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button></td>
+                <td className="px-3 py-2"><button type="button" onClick={() => setOpen({ ...open, [l.employee_id]: !open[l.employee_id] })} aria-label={`Rincian gaji ${l.full_name}`} aria-expanded={Boolean(open[l.employee_id])}>{open[l.employee_id] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button></td>
                 <td className="px-3 py-2"><div className="font-medium">{l.full_name}</div><div className="text-xs text-muted-foreground mk-num">{l.code}</div></td>
                 <td className="px-3 py-2 text-right mk-num">{dur(l.durations.paid_minutes)}</td>
                 <td className="px-3 py-2 text-right mk-num">{rupiah(l.gross)}</td>
@@ -41,7 +49,7 @@ export default function PeriodDetail() {
                 <td className="px-3 py-2 text-right mk-num">{rupiah(l.net_final)}</td>
                 <td className={`px-3 py-2 text-right mk-num ${l.adj_net > 0 ? "text-emerald-700" : l.adj_net < 0 ? "text-red-700" : "text-muted-foreground"}`} data-testid={`adj-net-${l.code}`}>{l.adj_count ? `${l.adj_net >= 0 ? "+" : "−"}${rupiah(Math.abs(l.adj_net))}` : "—"}</td>
                 <td className="px-3 py-2 text-right mk-num font-semibold text-[#0B1F3A]" data-testid={`net-effective-${l.code}`}>{rupiah(l.net_effective)}</td>
-                <td className="px-3 py-2 text-right whitespace-nowrap"><Button size="sm" variant="ghost" onClick={() => setAdjLine(l)} data-testid={`adjust-${l.code}`}><PencilLine className="h-3.5 w-3.5 mr-1" />Koreksi</Button><Button size="sm" variant="outline" onClick={() => pdf(`/payroll/periods/${p.id}/slip/${l.employee_id}.pdf`, `slip-${l.code}-${p.id}.pdf`)} data-testid={`slip-pdf-${l.code}`}><FileDown className="h-3.5 w-3.5" /></Button></td>
+                <td className="px-3 py-2 text-right whitespace-nowrap"><Button size="sm" variant="ghost" onClick={() => setAdjLine(l)} data-testid={`adjust-${l.code}`}><PencilLine className="h-3.5 w-3.5 mr-1" />Koreksi</Button><Button size="sm" variant="outline" aria-label={`Unduh slip gaji ${l.full_name}`} onClick={() => pdf(`/payroll/periods/${p.id}/slip/${l.employee_id}.pdf`, `slip-${l.code}-${p.id}.pdf`)} data-testid={`slip-pdf-${l.code}`}><FileDown className="h-3.5 w-3.5" /></Button></td>
               </tr>
               {open[l.employee_id] && <tr><td colSpan={9} className="p-0"><PayrollBreakdown line={l} /></td></tr>}
             </Fragment>

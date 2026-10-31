@@ -1,26 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Search, Pencil, Power } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Search, Pencil, Power, NotebookPen, FileDown, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, StatusBadge, Loading, EmptyState, selectCls } from "@/components/app/common";
-import { api, errMsg } from "@/lib/api";
+import { api, downloadPdf, errMsg } from "@/lib/api";
 import { rupiah, dateID, MODE_LABEL } from "@/lib/format";
 import EmployeeForm from "./EmployeeForm";
 
 export default function Employees() {
+  const navigate = useNavigate();
   const [list, setList] = useState(null);
   const [deps, setDeps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [depsError, setDepsError] = useState("");
   const [filter, setFilter] = useState({ q: "", status: "all", mode: "all", department_id: "" });
   const [form, setForm] = useState({ open: false, id: null });
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     const params = { ...filter, department_id: filter.department_id || undefined };
-    api.get("/employees", { params }).then((r) => setList(r.data)).catch((e) => toast.error(errMsg(e)));
+    setLoading(true);
+    setLoadError("");
+    try { const r = await api.get("/employees", { params }); setList(r.data); }
+    catch (e) { setList(null); setLoadError(errMsg(e)); }
+    finally { setLoading(false); }
   }, [filter]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { api.get("/departments").then((r) => setDeps(r.data)); }, []);
+  useEffect(() => { api.get("/departments").then((r) => setDeps(r.data)).catch((e) => setDepsError(errMsg(e))); }, []);
 
   const toggle = async (e) => {
     if (!window.confirm(`${e.active ? "Nonaktifkan" : "Aktifkan"} ${e.full_name}?`)) return;
@@ -36,7 +45,7 @@ export default function Employees() {
   return (
     <div>
       <PageHeader eyebrow="Master data" title="Data Karyawan" subtitle="ID karyawan dibuat otomatis, unik, dan tidak berubah."
-        actions={<Button className="mk-gradient text-white" onClick={() => setForm({ open: true, id: null })} data-testid="add-employee-button"><Plus className="h-4 w-4 mr-1" /> Tambah Karyawan</Button>} />
+        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => downloadPdf("/employees/directory.pdf", "direktori-karyawan.pdf").catch((e) => toast.error(errMsg(e)))} data-testid="employee-directory-pdf"><FileDown className="h-4 w-4 mr-1" />Direktori PDF</Button><Button className="mk-gradient text-white" onClick={() => setForm({ open: true, id: null })} data-testid="add-employee-button"><Plus className="h-4 w-4 mr-1" /> Tambah Karyawan</Button></div>} />
       <div className="mk-card">
         <div className="flex flex-col md:flex-row gap-3 p-4 border-b">
           <div className="relative flex-1">
@@ -53,7 +62,8 @@ export default function Employees() {
             <option value="">Semua departemen</option>{deps.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
-        {!list ? <Loading /> : list.length === 0 ? <EmptyState title="Belum ada karyawan" hint="Tambahkan karyawan pertama untuk mulai mencatat absensi." /> : (
+        {depsError && <div className="border-b bg-amber-50 px-4 py-2 text-sm text-amber-900" role="alert">Daftar departemen gagal dimuat: {depsError}</div>}
+        {loading ? <Loading /> : loadError ? <EmptyState title="Daftar karyawan gagal dimuat" hint={loadError} action={<Button onClick={load}>Coba lagi</Button>} /> : list.length === 0 ? <EmptyState title="Belum ada karyawan" hint="Tambahkan karyawan pertama untuk mulai mencatat absensi." /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="employees-table">
               <thead className="bg-[#F4F7FB] text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -70,8 +80,10 @@ export default function Employees() {
                     <td className="px-4 py-3">{dateID(e.join_date)}</td>
                     <td className="px-4 py-3"><StatusBadge status={e.active ? "active" : "inactive"} /></td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <Button variant="ghost" size="sm" onClick={() => setForm({ open: true, id: e.id })} data-testid={`edit-employee-${e.code}`}><Pencil className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="sm" onClick={() => toggle(e)} data-testid={`toggle-employee-${e.code}`} title={e.active ? "Nonaktifkan" : "Aktifkan"}>
+                      <Button variant="ghost" size="sm" onClick={() => navigate(`/karyawan/${e.id}`)} aria-label={`Detail karyawan ${e.full_name}`} data-testid={`employee-detail-${e.code}`}><Eye className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => setForm({ open: true, id: e.id })} aria-label={`Ubah data karyawan ${e.full_name}`} data-testid={`edit-employee-${e.code}`}><Pencil className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => navigate(`/karyawan/${e.id}/catatan`)} aria-label={`Catatan ${e.full_name}`} data-testid={`employee-notes-${e.code}`}><NotebookPen className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => toggle(e)} aria-label={`${e.active ? "Nonaktifkan" : "Aktifkan"} karyawan ${e.full_name}`} data-testid={`toggle-employee-${e.code}`}>
                         <Power className={`h-4 w-4 ${e.active ? "text-red-600" : "text-emerald-600"}`} />
                       </Button>
                     </td>
