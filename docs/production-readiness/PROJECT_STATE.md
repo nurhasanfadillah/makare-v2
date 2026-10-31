@@ -27,7 +27,7 @@ Last updated: 2026-10-31
 - Finish responsive/keyboard/screen-reader/contrast/touch-target review and resolve/accept the build-only `deepmerge` advisories.
 - Run a Neon backup/restore drill on an isolated branch, record recovery time, and finish rollback/incident runbooks.
 - Complete owner UAT for payroll examples, retention, and operational SOP.
-- The latest pushed source commit is `13f4af3`, including dependency and database-backed rate-limit changes. CI is prepared locally but not pushed because the available GitHub OAuth authorization lacks `workflow` scope. Once GitHub authorization includes that scope, push the workflow and confirm its run.
+- Latest pushed source commit: `b456390`. GitHub Actions run `41188865261` passed both backend-unit (tests and pip-audit) and frontend-build (Yarn runtime audit and production build). GitHub CLI OAuth is authorized with `workflow` scope and stored in the local keyring; the one-time PAT pasted into chat was revoked (HTTP 202).
 
 ## Business baseline
 

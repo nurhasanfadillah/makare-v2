@@ -37,3 +37,10 @@
 - Upgraded FastAPI/Starlette and patched frontend dependency resolutions; backend isolated suite: 135 passed; Python runtime audit and Yarn runtime audit are clean. The full Yarn audit reports three low `deepmerge` advisories in build/test tooling.
 - Re-ran final transactional cleanup after the last live smoke. Verified: 2 users, 4 departments, 1 settings row, 3 migrations, 1 cleanup audit event; zero employees, attendance, overtime, employee notes/revisions, payroll periods/snapshots, advances, adjustments, or rate-limit buckets. Revoked all existing sessions.
 - Updated deployment/readiness records. CI workflow remains local because GitHub authorization lacks the `workflow` scope. Latest implementation files are not yet committed/pushed. The comprehensive module trace, browser accessibility audit, isolated backup/restore drill, hosted CI run, and owner UAT remain release gates.
+
+
+## 2026-10-31 ? GitHub workflow authorization and CI pass
+
+- Authorized GitHub CLI OAuth with the `workflow` scope through the device flow. The credential is held in the local GitHub CLI keyring, not in the repository. The PAT pasted into chat was revoked via GitHub's credential-revocation endpoint (HTTP 202).
+- Pushed `.github/workflows/ci.yml` and fixed its test dependency declaration (`pytest-xdist==3.8.0`, required by the repository's `pytest.ini`).
+- GitHub Actions run `41188865261` completed successfully: backend isolated tests and `pip-audit`, plus Yarn runtime dependency audit and frontend production build.
