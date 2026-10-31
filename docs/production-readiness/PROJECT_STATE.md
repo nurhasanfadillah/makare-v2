@@ -27,7 +27,7 @@ Last updated: 2026-10-31
 - Finish responsive/keyboard/screen-reader/contrast/touch-target review and resolve/accept the build-only `deepmerge` advisories.
 - Run a Neon backup/restore drill on an isolated branch, record recovery time, and finish rollback/incident runbooks.
 - Complete owner UAT for payroll examples, retention, and operational SOP.
-- The last pushed source commit is `822ec95`; dependency and rate-limit changes described above are in the current local working tree and still need a source commit/push. CI is prepared locally but not pushed because the available GitHub OAuth authorization lacks `workflow` scope. Once GitHub authorization includes that scope, push the workflow and confirm its run.
+- The latest pushed source commit is `13f4af3`, including dependency and database-backed rate-limit changes. CI is prepared locally but not pushed because the available GitHub OAuth authorization lacks `workflow` scope. Once GitHub authorization includes that scope, push the workflow and confirm its run.
 
 ## Business baseline
 
